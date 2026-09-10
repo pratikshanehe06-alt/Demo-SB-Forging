@@ -2567,7 +2567,7 @@ async def _compute_report(user: "User", req: ReportRunRequest) -> Dict[str, Any]
 async def reports_catalog(user: User = Depends(require_module("REPORTS"))):
     return {"reports": REPORT_CATALOG,
             "aggregations": ["daily", "weekly", "monthly"],
-            "export_formats": ["csv", "pdf", "json"]}
+            "export_formats": ["csv", "xlsx", "pdf", "json"]}
 
 
 @api.post("/reports/run")
@@ -2675,6 +2675,95 @@ def _pdf_response(report: Dict[str, Any]):
                               headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
+def _xlsx_response(report: Dict[str, Any]):
+    from fastapi.responses import StreamingResponse
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    wb = Workbook()
+
+    header_fill = PatternFill("solid", fgColor="1E3A8A")
+    header_font = Font(bold=True, color="FFFFFF")
+    title_font = Font(bold=True, size=14, color="1E293B")
+    subtitle_font = Font(italic=True, color="64748B")
+    section_font = Font(bold=True, size=11, color="0F172A")
+
+    def _autofit(ws, ncols):
+        for i in range(1, ncols + 1):
+            letter = get_column_letter(i)
+            width = 12
+            for row in ws.iter_rows(min_col=i, max_col=i, values_only=True):
+                v = row[0]
+                if v is None:
+                    continue
+                width = max(width, min(40, len(str(v)) + 2))
+            ws.column_dimensions[letter].width = width
+
+    def _write_table(ws, start_row, cols, rows):
+        headers = [c["label"] for c in cols]
+        for j, h in enumerate(headers, start=1):
+            cell = ws.cell(row=start_row, column=j, value=h)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal="left", vertical="center")
+        for i, r in enumerate(rows, start=1):
+            for j, c in enumerate(cols, start=1):
+                v = r.get(c["key"], "")
+                ws.cell(row=start_row + i, column=j, value=v)
+        ws.freeze_panes = ws.cell(row=start_row + 1, column=1)
+        _autofit(ws, len(cols))
+
+    # ---- Summary sheet ----
+    ws = wb.active
+    ws.title = "Summary"
+    ws["A1"] = f"CoreOT — {report['report_name']}"
+    ws["A1"].font = title_font
+    ws.merge_cells("A1:D1")
+    ws["A2"] = (f"Range: {report['range']['start']} → {report['range']['end']}  "
+                f"·  Aggregation: {report['range']['aggregation']}  "
+                f"·  Metric: {report['metric']}")
+    ws["A2"].font = subtitle_font
+    ws.merge_cells("A2:D2")
+
+    ws["A4"] = "KPIs"; ws["A4"].font = section_font
+    _write_table(ws, 5,
+                  [{"key": "label", "label": "KPI"}, {"key": "value", "label": "Value"}],
+                  report["kpis"])
+
+    # ---- Trend sheet ----
+    ws2 = wb.create_sheet("Trend")
+    _write_table(ws2, 1, report["columns"], report["rows"])
+
+    # ---- Breakdown sheet ----
+    if report.get("detail_rows"):
+        ws3 = wb.create_sheet("Breakdown")
+        _write_table(ws3, 1, report["detail_columns"], report["detail_rows"])
+
+    # ---- Forecast sheet ----
+    if report.get("forecast") and report["forecast"].get("points"):
+        ws4 = wb.create_sheet("Forecast")
+        ws4["A1"] = f"Forecast — metric: {report['forecast']['metric']} · 95% CI"
+        ws4["A1"].font = section_font
+        ws4.merge_cells("A1:D1")
+        _write_table(ws4, 3,
+                      [{"key": "step", "label": "Step"},
+                       {"key": "value", "label": "Forecast"},
+                       {"key": "lower", "label": "Lower 95%"},
+                       {"key": "upper", "label": "Upper 95%"}],
+                      report["forecast"]["points"])
+
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    filename = f"{report['report_type'].lower()}_{report['range']['start']}_{report['range']['end']}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @api.post("/reports/export")
 async def reports_export(req: ReportRunRequest, user: User = Depends(require_module("REPORTS"))):
     fmt = (req.format or "csv").lower()
@@ -2685,11 +2774,13 @@ async def reports_export(req: ReportRunRequest, user: User = Depends(require_mod
         return _csv_response(result)
     if fmt == "pdf":
         return _pdf_response(result)
+    if fmt == "xlsx":
+        return _xlsx_response(result)
     if fmt == "json":
         from fastapi.responses import JSONResponse
         filename = f"{req.report_type.lower()}_{result['range']['start']}_{result['range']['end']}.json"
         return JSONResponse(result, headers={"Content-Disposition": f'attachment; filename="{filename}"'})
-    raise HTTPException(status_code=400, detail="format must be csv, pdf or json")
+    raise HTTPException(status_code=400, detail="format must be csv, xlsx, pdf or json")
 
 
 class ReportTemplateSave(BaseModel):

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  FileBarChart2, Download, FileText, FileJson, Sparkles, Save, Trash2, Play,
+  FileBarChart2, Download, FileText, FileJson, FileSpreadsheet, Sparkles, Save, Trash2, Play,
   TrendingUp, Factory, Activity, Wrench, Zap, Timer,
 } from "lucide-react";
 import {
@@ -304,6 +304,9 @@ export default function ReportsPage() {
         </Button>
         <Button variant="outline" onClick={() => doExport("csv")} disabled={!result} data-testid="export-csv-btn">
           <Download className="h-4 w-4 mr-1" /> CSV
+        </Button>
+        <Button variant="outline" onClick={() => doExport("xlsx")} disabled={!result} data-testid="export-xlsx-btn">
+          <FileSpreadsheet className="h-4 w-4 mr-1" /> Excel
         </Button>
         <Button variant="outline" onClick={() => doExport("pdf")} disabled={!result} data-testid="export-pdf-btn">
           <FileText className="h-4 w-4 mr-1" /> PDF

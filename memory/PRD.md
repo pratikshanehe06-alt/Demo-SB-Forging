@@ -23,7 +23,7 @@ Full-stack multi-tenant Industrial IoT web app (CoreOT). Prototype covering:
   - Backend `REPORTS` module (default ON, backfilled to existing tenants on startup)
   - `GET /api/reports/catalog` — 5 report types (Production, OEE, Energy, Downtime, Maintenance) with metrics + aggregations
   - `POST /api/reports/run` — daily / weekly / monthly aggregation, plant + asset filters, optional forecast (linear regression + 95% CI)
-  - `POST /api/reports/export` — CSV / PDF (reportlab) / JSON
+  - `POST /api/reports/export` — CSV / Excel (openpyxl) / PDF (reportlab) / JSON
   - `GET|POST|DELETE /api/reports/templates` — save custom filter presets per tenant
   - Frontend `/reports` page: 5 report tiles, filter panel (aggregation, dates, plant, metric, forecast toggle + horizon), preset chips (30d / 12w / 12mo), KPI cards, composed chart with actual bars + forecast line + CI band, trend + breakdown tables, export buttons, saved templates chips
   - Audit log entries for report.run / report.export / report.template.save|delete
@@ -37,7 +37,6 @@ APM, EEMS, DIGITAL_TWIN, OEE_APS, AI_COPILOT, REPORTS (default ON), AUDIT.
 - **P1**: Digital Twin visual module (2D/3D live representation)
 - **P1**: AI Copilot module (Claude Sonnet 5 via Emergent LLM key)
 - **P2**: Scheduled Reports + email delivery (Resend managed) with per-recipient list
-- **P2**: Excel (.xlsx) export
 - **P2**: Report template folder-sharing / recipients / cron
 - **P2**: Asset Class bulk threshold presets
 - **P3**: server.py refactor into /app/backend/routers/* (reports, apm, oee, eems, platform)
@@ -45,5 +44,4 @@ APM, EEMS, DIGITAL_TWIN, OEE_APS, AI_COPILOT, REPORTS (default ON), AUDIT.
 
 ## Known limitations
 - Reports scheduling + email is not yet wired (deferred by user for iter 7)
-- Excel export uses CSV; no xlsx generator installed yet
-- server.py has grown to ~2760 lines — modular refactor pending
+- server.py has grown to ~2860 lines — modular refactor pending
