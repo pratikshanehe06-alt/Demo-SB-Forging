@@ -60,13 +60,13 @@ MODULE_CATALOG: List[Dict[str, Any]] = [
      "default": True, "gates": ["assets", "hierarchy", "asset360", "operator"]},
     {"key": "EEMS", "name": "Enterprise Energy Management",
      "description": "EMS, PQI, DERMS and Utility metering across every plant.",
-     "default": False, "gates": ["energy"]},
+     "default": True, "gates": ["energy"]},
     {"key": "DIGITAL_TWIN", "name": "Digital Twin",
      "description": "Visual real-time twin of every machine on the floor.",
      "default": True, "gates": ["twin"]},
     {"key": "OEE_APS", "name": "OEE & APS",
      "description": "Availability × Performance × Quality plus advanced planning.",
-     "default": False, "gates": ["oee", "aps"]},
+     "default": True, "gates": ["oee", "aps"]},
     {"key": "AI_COPILOT", "name": "AI Copilot",
      "description": "Natural-language insights, downtime RCA and recommendations.",
      "default": False, "gates": ["copilot"]},
@@ -75,7 +75,7 @@ MODULE_CATALOG: List[Dict[str, Any]] = [
      "default": False, "gates": ["reports"]},
     {"key": "AUDIT", "name": "Audit & Compliance",
      "description": "Every config change, ack and login — searchable and exportable.",
-     "default": False, "gates": ["audit"]},
+     "default": True, "gates": ["audit"]},
 ]
 
 
@@ -188,6 +188,7 @@ class Asset(BaseModel):
     manufacturer: Optional[str] = None
     model: Optional[str] = None
     serial: Optional[str] = None
+    location: Optional[str] = None
     criticality: str = "MEDIUM"
     status: str = "OFFLINE"  # RUNNING | STOPPED | IDLE | WARNING | FAULT | CRITICAL | OFFLINE
     health: int = 100
@@ -204,6 +205,7 @@ class AssetCreate(BaseModel):
     manufacturer: Optional[str] = None
     model: Optional[str] = None
     serial: Optional[str] = None
+    location: Optional[str] = None
     criticality: str = "MEDIUM"
     status: str = "OFFLINE"
     health: int = 100
@@ -217,6 +219,7 @@ class AssetUpdate(BaseModel):
     manufacturer: Optional[str] = None
     model: Optional[str] = None
     serial: Optional[str] = None
+    location: Optional[str] = None
     criticality: Optional[str] = None
     status: Optional[str] = None
     health: Optional[int] = None
@@ -247,6 +250,7 @@ class TelemetryIn(BaseModel):
     rpm: Optional[float] = None
     voltage: Optional[float] = None
     current: Optional[float] = None
+    flow: Optional[float] = None
     power: Optional[float] = None
     energy: Optional[float] = None
     production_count: Optional[int] = None
@@ -327,11 +331,20 @@ ws_manager = WSManager()
 # ---------------------------------------------------------------------------
 
 TENANTS_SEED = [
+    {"code": "PLATFORM", "name": "CoreOT Platform"},
     {"code": "SBF", "name": "SB Forgtech Pvt Ltd"},
     {"code": "ABC", "name": "ABC Manufacturing Pvt Ltd"},
 ]
 
 USERS_SEED = [
+    {
+        "email": "superadmin@coreot.com",
+        "name": "Platform Admin",
+        "role": "PLATFORM_SUPER_ADMIN",
+        "password": "Super@123",
+        "tenant_code": "PLATFORM",
+        "employee_id": "SA-001",
+    },
     {
         "email": "tenantadmin@sbforgtech.com",
         "name": "Rajesh Kumar",
@@ -491,6 +504,7 @@ async def seed_database() -> None:
             "manufacturer": "Siemens",
             "model": "S840D",
             "serial": "SN-DEMO-001",
+            "location": "Pune, MH · Forging Area · Bay 1",
             "criticality": "HIGH",
             "status": "RUNNING",
             "health": 91,
@@ -542,6 +556,7 @@ async def seed_database() -> None:
                 "manufacturer": random.choice(["Siemens", "ABB", "Bosch", "Kirloskar", "L&T"]),
                 "model": f"M-{random.randint(100,999)}",
                 "serial": f"SN-{random.randint(10000,99999)}",
+                "location": f"Pune, MH · {area} · Bay {random.randint(1, 6)}",
                 "criticality": random.choice(["LOW", "MEDIUM", "HIGH"]),
                 "status": st,
                 "health": h,
@@ -602,6 +617,119 @@ async def seed_database() -> None:
                 "created_at": (now - timedelta(minutes=15 * i)).isoformat(),
             }
         )
+
+    # ---- Lines (for OEE per-line breakdown) ----
+    lines_seed = [
+        ("Forging Area", "Forge Line 1"),
+        ("Forging Area", "Forge Line 2"),
+        ("Heat Treatment", "Anneal Line"),
+        ("Heat Treatment", "Temper Line"),
+        ("Utilities", "Utility Loop"),
+    ]
+    for area_name, line_name in lines_seed:
+        await db.lines.insert_one({
+            "id": str(uuid.uuid4()),
+            "tenant_id": sbf,
+            "plant_id": plant_id,
+            "area_id": area_ids[area_name],
+            "name": line_name,
+            "ideal_rate_per_hr": random.randint(40, 80),
+        })
+
+    # ---- Downtime events (last 7 days) ----
+    reasons = ["Tool change", "Material shortage", "Breakdown", "Setup", "No operator", "Power dip"]
+    for i in range(24):
+        a = random.choice(all_assets)
+        started = now - timedelta(days=random.randint(0, 6), hours=random.randint(0, 23))
+        duration = random.randint(5, 60)
+        await db.downtime_events.insert_one({
+            "id": str(uuid.uuid4()),
+            "tenant_id": sbf,
+            "asset_id": a["id"],
+            "asset_code": a["asset_code"],
+            "plant_id": a["plant_id"],
+            "reason": random.choice(reasons),
+            "duration_min": duration,
+            "started_at": started.isoformat(),
+            "ended_at": (started + timedelta(minutes=duration)).isoformat(),
+        })
+
+    # ---- Energy records (30 days per plant) ----
+    all_plants = await db.plants.find({"tenant_id": sbf}, {"_id": 0}).to_list(50)
+    rate_inr_per_kwh = 9.4
+    for p in all_plants:
+        seed_rng = random.Random(sum(ord(c) for c in p["code"]))
+        base_load = 4500 + seed_rng.random() * 3000
+        for d in range(30):
+            day = (now - timedelta(days=d)).date().isoformat()
+            kwh = round(base_load + seed_rng.random() * 800 - (200 if d % 7 in (5, 6) else 0), 1)
+            pf = round(0.85 + seed_rng.random() * 0.13, 3)
+            thd = round(2.0 + seed_rng.random() * 3.5, 2)
+            peak_kw = round(kwh / 22 + seed_rng.random() * 40, 1)
+            await db.energy_records.insert_one({
+                "id": str(uuid.uuid4()),
+                "tenant_id": sbf,
+                "plant_id": p["id"],
+                "plant_name": p["name"],
+                "date": day,
+                "kwh": kwh,
+                "cost_inr": round(kwh * rate_inr_per_kwh, 0),
+                "peak_kw": peak_kw,
+                "power_factor": pf,
+                "thd": thd,
+                "renewable_pct": round(8 + seed_rng.random() * 22, 1),
+                "carbon_kg": round(kwh * 0.82, 1),
+            })
+
+    # ---- Some initial production_log entries so OEE has real numbers ----
+    op = await db.users.find_one({"email": "operator@sbforgtech.com"}, {"_id": 0})
+    cnc = await db.assets.find_one({"asset_code": "CNC-DEMO-01"}, {"_id": 0})
+    if op and cnc:
+        for d in range(7):
+            for _ in range(random.randint(2, 4)):
+                produced = random.randint(60, 120)
+                good = int(produced * random.uniform(0.9, 0.98))
+                ts = (now - timedelta(days=d, hours=random.randint(0, 23))).isoformat()
+                await db.production_log.insert_one({
+                    "id": str(uuid.uuid4()),
+                    "tenant_id": sbf,
+                    "asset_id": cnc["id"],
+                    "asset_code": cnc["asset_code"],
+                    "operator_id": op["id"],
+                    "operator_name": op["name"],
+                    "produced": produced,
+                    "good": good,
+                    "reject": produced - good,
+                    "ts": ts,
+                })
+
+    # ---- Maintenance history ----
+    m_types = ["PREVENTIVE", "CORRECTIVE", "PREDICTIVE"]
+    m_desc = {
+        "PREVENTIVE": ["Oil change", "Filter replacement", "Belt inspection", "Lubrication", "Bolt torque check"],
+        "CORRECTIVE": ["Bearing replaced", "Motor rewinding", "Sensor replaced", "Coupling repair"],
+        "PREDICTIVE": ["Vibration diagnostics", "Thermal imaging", "Oil analysis"],
+    }
+    techs = ["A. Sharma", "R. Iyer", "M. Patil", "S. Khan", "N. Deshmukh"]
+    for a in all_assets[:20]:
+        n = random.randint(2, 5)
+        for _ in range(n):
+            mtype = random.choice(m_types)
+            performed = now - timedelta(days=random.randint(2, 180))
+            next_due = performed + timedelta(days=random.randint(30, 120))
+            cost = random.randint(1500, 22000)
+            await db.maintenance_records.insert_one({
+                "id": str(uuid.uuid4()),
+                "tenant_id": sbf,
+                "asset_id": a["id"],
+                "asset_code": a["asset_code"],
+                "type": mtype,
+                "description": random.choice(m_desc[mtype]),
+                "technician": random.choice(techs),
+                "cost_inr": cost,
+                "performed_at": performed.isoformat(),
+                "next_due_at": next_due.isoformat(),
+            })
 
     logger.info("Seed complete.")
 
@@ -1067,6 +1195,7 @@ async def acknowledge_alarm(alarm_id: str, user: User = Depends(get_current_user
     )
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Alarm not found")
+    await record_audit(user, "alarm.ack", "alarm", alarm_id, {})
     return {"ok": True}
 
 
@@ -1154,6 +1283,8 @@ async def toggle_module(module_key: str, payload: ModuleToggle,
     )
     await ws_manager.broadcast(user.tenant_id,
                                {"type": "modules", "modules": state})
+    await record_audit(user, "module.toggle", "module", module_key,
+                       {"enabled": payload.enabled})
     return {"key": module_key, "enabled": payload.enabled, "modules": state}
 
 
@@ -1210,7 +1341,499 @@ async def assign_user_machine(user_id: str, payload: UserAssignment,
         {"id": user_id, "tenant_id": user.tenant_id},
         {"$set": {"assigned_asset_id": payload.assigned_asset_id}},
     )
+    await record_audit(user, "user.assign", "user", user_id,
+                       {"assigned_asset_id": payload.assigned_asset_id})
     return {"ok": True, "user_id": user_id, "assigned_asset_id": payload.assigned_asset_id}
+
+
+# ---------------------------------------------------------------------------
+# APM: metrics / maintenance / compare
+# ---------------------------------------------------------------------------
+
+
+class MaintenanceCreate(BaseModel):
+    type: str  # PREVENTIVE | CORRECTIVE | PREDICTIVE
+    description: str = Field(min_length=1)
+    technician: Optional[str] = None
+    cost_inr: float = Field(default=0, ge=0)
+    performed_at: Optional[str] = None
+    next_due_at: Optional[str] = None
+
+
+async def _compute_asset_metrics(tenant_id: str, asset: Dict[str, Any]) -> Dict[str, Any]:
+    aid = asset["id"]
+    # runtime hours: number of RUNNING telemetry samples × sample interval (5s)
+    running_samples = await db.telemetry.count_documents({"asset_id": aid, "machine_status": "RUNNING"})
+    runtime_hours = round(running_samples * 5 / 3600, 2)
+
+    # failures: count of critical/fault alarms for this asset
+    failures = await db.alarms.count_documents({
+        "tenant_id": tenant_id, "asset_id": aid,
+        "severity": {"$in": ["CRITICAL", "MAJOR"]},
+    })
+
+    # downtime events
+    dts = await db.downtime_events.find({"tenant_id": tenant_id, "asset_id": aid}, {"_id": 0}).to_list(500)
+    total_downtime_min = sum(d.get("duration_min", 0) for d in dts)
+    dt_count = len(dts) or 1
+    mttr_hours = round((total_downtime_min / dt_count) / 60, 2) if dts else 0
+    mtbf_hours = round(runtime_hours / failures, 2) if failures > 0 else runtime_hours
+
+    # maintenance
+    mnts = await db.maintenance_records.find(
+        {"tenant_id": tenant_id, "asset_id": aid}, {"_id": 0}
+    ).sort("performed_at", -1).to_list(200)
+    year_start = f"{datetime.now(timezone.utc).year}-01-01"
+    cost_ytd = round(sum(m.get("cost_inr", 0) for m in mnts if m.get("performed_at", "") >= year_start), 0)
+    last_m = mnts[0] if mnts else None
+    upcoming = [m for m in mnts if m.get("next_due_at") and m["next_due_at"] > datetime.now(timezone.utc).isoformat()]
+    upcoming.sort(key=lambda m: m["next_due_at"])
+    next_m = upcoming[0] if upcoming else None
+
+    return {
+        "asset_id": aid,
+        "asset_code": asset["asset_code"],
+        "name": asset["name"],
+        "asset_type": asset["asset_type"],
+        "status": asset["status"],
+        "health": asset["health"],
+        "runtime_hours": runtime_hours,
+        "failure_count": failures,
+        "mtbf_hours": mtbf_hours,
+        "mttr_hours": mttr_hours,
+        "downtime_min_total": total_downtime_min,
+        "downtime_events": len(dts),
+        "maintenance_count": len(mnts),
+        "maintenance_cost_ytd": cost_ytd,
+        "last_maintenance": last_m,
+        "next_maintenance": next_m,
+    }
+
+
+@api.get("/assets/{asset_id}/metrics")
+async def asset_metrics(asset_id: str, user: User = Depends(require_module("APM"))):
+    a = await db.assets.find_one({"id": asset_id, "tenant_id": user.tenant_id}, {"_id": 0})
+    if not a:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    return await _compute_asset_metrics(user.tenant_id, a)
+
+
+@api.get("/assets/{asset_id}/maintenance")
+async def list_maintenance(asset_id: str, user: User = Depends(require_module("APM"))):
+    return await db.maintenance_records.find(
+        {"tenant_id": user.tenant_id, "asset_id": asset_id}, {"_id": 0}
+    ).sort("performed_at", -1).to_list(200)
+
+
+@api.post("/assets/{asset_id}/maintenance")
+async def add_maintenance(asset_id: str, payload: MaintenanceCreate,
+                          user: User = Depends(require_module("APM"))):
+    if user.role not in ("TENANT_ADMIN", "PRODUCTION_MANAGER", "SUPERVISOR"):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    if payload.type not in ("PREVENTIVE", "CORRECTIVE", "PREDICTIVE"):
+        raise HTTPException(status_code=400, detail="Invalid maintenance type")
+    a = await db.assets.find_one({"id": asset_id, "tenant_id": user.tenant_id}, {"_id": 0})
+    if not a:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "id": str(uuid.uuid4()),
+        "tenant_id": user.tenant_id,
+        "asset_id": asset_id,
+        "asset_code": a["asset_code"],
+        "type": payload.type,
+        "description": payload.description,
+        "technician": payload.technician or user.name,
+        "cost_inr": payload.cost_inr,
+        "performed_at": payload.performed_at or now_iso,
+        "next_due_at": payload.next_due_at,
+    }
+    await db.maintenance_records.insert_one(doc.copy())
+    await record_audit(user, "maintenance.create", "asset", asset_id,
+                       {"type": payload.type, "cost_inr": payload.cost_inr})
+    doc.pop("_id", None)
+    return doc
+
+
+@api.get("/apm/compare")
+async def compare_assets(user: User = Depends(require_module("APM")),
+                         ids: str = Query(..., description="Comma-separated asset ids, up to 4"),
+                         history_limit: int = 60):
+    id_list = [x.strip() for x in ids.split(",") if x.strip()]
+    if not id_list:
+        raise HTTPException(status_code=400, detail="Provide at least one asset id")
+    if len(id_list) > 4:
+        raise HTTPException(status_code=400, detail="Compare up to 4 assets")
+    out = []
+    for aid in id_list:
+        a = await db.assets.find_one({"id": aid, "tenant_id": user.tenant_id}, {"_id": 0})
+        if not a:
+            continue
+        metrics = await _compute_asset_metrics(user.tenant_id, a)
+        history = await db.telemetry.find(
+            {"asset_id": aid}, {"_id": 0, "ts": 1, "temperature": 1, "vibration": 1, "rpm": 1, "power": 1}
+        ).sort("ts", -1).to_list(history_limit)
+        history.reverse()
+        out.append({**metrics, "history": history, "location": a.get("location")})
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Audit logging
+# ---------------------------------------------------------------------------
+
+
+async def record_audit(user: "User", action: str, entity: Optional[str] = None,
+                       entity_id: Optional[str] = None, details: Optional[Dict[str, Any]] = None,
+                       tenant_id: Optional[str] = None) -> None:
+    try:
+        await db.audit_logs.insert_one({
+            "id": str(uuid.uuid4()),
+            "tenant_id": tenant_id or user.tenant_id,
+            "user_id": user.id,
+            "user_email": user.email,
+            "user_name": user.name,
+            "role": user.role,
+            "action": action,
+            "entity": entity,
+            "entity_id": entity_id,
+            "details": details or {},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as exc:
+        logger.warning("audit insert failed: %s", exc)
+
+
+@api.get("/audit-logs")
+async def list_audit_logs(user: User = Depends(get_current_user),
+                          action: Optional[str] = None,
+                          entity: Optional[str] = None,
+                          q: Optional[str] = None,
+                          limit: int = 100):
+    query: Dict[str, Any] = {"tenant_id": user.tenant_id}
+    if action:
+        query["action"] = action
+    if entity:
+        query["entity"] = entity
+    if q:
+        query["$or"] = [
+            {"user_email": {"$regex": q, "$options": "i"}},
+            {"action": {"$regex": q, "$options": "i"}},
+            {"entity_id": {"$regex": q, "$options": "i"}},
+        ]
+    rows = await db.audit_logs.find(query, {"_id": 0}).sort("created_at", -1).to_list(limit)
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# Users CRUD (Tenant Admin) + full editing
+# ---------------------------------------------------------------------------
+
+
+class UserCreate(BaseModel):
+    email: EmailStr
+    name: str
+    role: str
+    password: str
+    employee_id: Optional[str] = None
+    assigned_asset_id: Optional[str] = None
+
+
+class UserUpdate(BaseModel):
+    name: Optional[str] = None
+    role: Optional[str] = None
+    employee_id: Optional[str] = None
+    active: Optional[bool] = None
+    password: Optional[str] = None
+
+
+@api.post("/users")
+async def create_user(payload: UserCreate, user: User = Depends(get_current_user)):
+    if user.role != "TENANT_ADMIN":
+        raise HTTPException(status_code=403, detail="Only Tenant Admin can create users")
+    if payload.role not in ("CXO", "PRODUCTION_MANAGER", "SUPERVISOR", "OPERATOR", "TENANT_ADMIN"):
+        raise HTTPException(status_code=400, detail="Invalid role")
+    exists = await db.users.find_one({"email": payload.email.lower(), "tenant_id": user.tenant_id})
+    if exists:
+        raise HTTPException(status_code=409, detail="Email already exists in this tenant")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "tenant_id": user.tenant_id,
+        "email": payload.email.lower(),
+        "name": payload.name,
+        "role": payload.role,
+        "employee_id": payload.employee_id,
+        "plants": [],
+        "active": True,
+        "assigned_asset_id": payload.assigned_asset_id,
+        "password": hash_password(payload.password),
+    }
+    await db.users.insert_one(doc.copy())
+    await record_audit(user, "user.create", "user", doc["id"], {"email": doc["email"], "role": doc["role"]})
+    doc.pop("password", None)
+    doc.pop("_id", None)
+    return doc
+
+
+@api.put("/users/{user_id}")
+async def update_user(user_id: str, payload: UserUpdate, user: User = Depends(get_current_user)):
+    if user.role != "TENANT_ADMIN":
+        raise HTTPException(status_code=403, detail="Only Tenant Admin can edit users")
+    target = await db.users.find_one({"id": user_id, "tenant_id": user.tenant_id})
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    update: Dict[str, Any] = {}
+    for k in ("name", "role", "employee_id", "active"):
+        v = getattr(payload, k)
+        if v is not None:
+            update[k] = v
+    if payload.password:
+        update["password"] = hash_password(payload.password)
+    if not update:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    await db.users.update_one({"id": user_id, "tenant_id": user.tenant_id}, {"$set": update})
+    await record_audit(user, "user.update", "user", user_id,
+                       {"fields": [k for k in update.keys() if k != "password"]})
+    return {"ok": True}
+
+
+@api.delete("/users/{user_id}")
+async def delete_user(user_id: str, user: User = Depends(get_current_user)):
+    """Soft-deactivate. Prevent removing the last active Tenant Admin."""
+    if user.role != "TENANT_ADMIN":
+        raise HTTPException(status_code=403, detail="Only Tenant Admin can deactivate users")
+    if user_id == user.id:
+        raise HTTPException(status_code=400, detail="Cannot deactivate yourself")
+    target = await db.users.find_one({"id": user_id, "tenant_id": user.tenant_id})
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    if target["role"] == "TENANT_ADMIN":
+        active_admins = await db.users.count_documents(
+            {"tenant_id": user.tenant_id, "role": "TENANT_ADMIN", "active": True, "id": {"$ne": user_id}}
+        )
+        if active_admins == 0:
+            raise HTTPException(status_code=400, detail="Cannot deactivate the last Tenant Admin")
+    await db.users.update_one({"id": user_id, "tenant_id": user.tenant_id}, {"$set": {"active": False}})
+    await record_audit(user, "user.deactivate", "user", user_id, {"email": target["email"]})
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Platform Super Admin
+# ---------------------------------------------------------------------------
+
+
+async def require_super_admin(user: User = Depends(get_current_user)) -> User:
+    if user.role != "PLATFORM_SUPER_ADMIN":
+        raise HTTPException(status_code=403, detail="Platform Super Admin only")
+    return user
+
+
+class TenantCreate(BaseModel):
+    code: str
+    name: str
+    admin_email: EmailStr
+    admin_name: str
+    admin_password: str
+
+
+@api.get("/platform/tenants")
+async def platform_list_tenants(user: User = Depends(require_super_admin)):
+    tenants = await db.tenants.find({}, {"_id": 0}).to_list(200)
+    out = []
+    for t in tenants:
+        users_ct = await db.users.count_documents({"tenant_id": t["id"]})
+        assets_ct = await db.assets.count_documents({"tenant_id": t["id"]})
+        plants_ct = await db.plants.count_documents({"tenant_id": t["id"]})
+        out.append({**t, "users_count": users_ct, "assets_count": assets_ct, "plants_count": plants_ct})
+    return out
+
+
+@api.post("/platform/tenants")
+async def platform_create_tenant(payload: TenantCreate, user: User = Depends(require_super_admin)):
+    code = payload.code.upper().strip()
+    if await db.tenants.find_one({"code": code}):
+        raise HTTPException(status_code=409, detail="Tenant code already exists")
+    tid = str(uuid.uuid4())
+    await db.tenants.insert_one({"id": tid, "code": code, "name": payload.name})
+    admin_id = str(uuid.uuid4())
+    await db.users.insert_one({
+        "id": admin_id,
+        "tenant_id": tid,
+        "email": payload.admin_email.lower(),
+        "name": payload.admin_name,
+        "role": "TENANT_ADMIN",
+        "employee_id": None,
+        "plants": [],
+        "active": True,
+        "assigned_asset_id": None,
+        "password": hash_password(payload.admin_password),
+    })
+    # default modules
+    await get_tenant_modules(tid)
+    await record_audit(user, "tenant.create", "tenant", tid,
+                       {"code": code, "admin_email": payload.admin_email})
+    return {"id": tid, "code": code, "name": payload.name, "admin_id": admin_id}
+
+
+@api.delete("/platform/tenants/{tenant_id}")
+async def platform_delete_tenant(tenant_id: str, user: User = Depends(require_super_admin)):
+    t = await db.tenants.find_one({"id": tenant_id})
+    if not t:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    if t.get("code") == "PLATFORM":
+        raise HTTPException(status_code=400, detail="Cannot delete PLATFORM tenant")
+    # hard delete tenant + related docs
+    for coll in ("users", "plants", "areas", "assets", "alarms", "telemetry",
+                 "audit_logs", "escalations", "tenant_modules", "lines",
+                 "downtime_events", "energy_records", "production_log"):
+        await db[coll].delete_many({"tenant_id": tenant_id})
+    await db.tenants.delete_one({"id": tenant_id})
+    await record_audit(user, "tenant.delete", "tenant", tenant_id, {"code": t.get("code")})
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Energy (EEMS)
+# ---------------------------------------------------------------------------
+
+
+@api.get("/energy/summary")
+async def energy_summary(user: User = Depends(require_module("EEMS")),
+                         plant_id: Optional[str] = None,
+                         range: str = "30d"):
+    days = {"today": 1, "7d": 7, "30d": 30, "week": 7, "month": 30}.get(range, 30)
+    cutoff = (datetime.now(timezone.utc).date() - timedelta(days=days - 1)).isoformat()
+    q: Dict[str, Any] = {"tenant_id": user.tenant_id, "date": {"$gte": cutoff}}
+    if plant_id and plant_id != "all":
+        q["plant_id"] = plant_id
+    rows = await db.energy_records.find(q, {"_id": 0}).sort("date", 1).to_list(2000)
+    kpis = {
+        "kwh": round(sum(r["kwh"] for r in rows), 1),
+        "cost_inr": round(sum(r["cost_inr"] for r in rows), 0),
+        "peak_kw": round(max((r["peak_kw"] for r in rows), default=0), 1),
+        "avg_power_factor": round(sum(r["power_factor"] for r in rows) / len(rows), 3) if rows else 0,
+        "avg_thd": round(sum(r["thd"] for r in rows) / len(rows), 2) if rows else 0,
+        "renewable_pct": round(sum(r["renewable_pct"] for r in rows) / len(rows), 1) if rows else 0,
+        "carbon_kg": round(sum(r["carbon_kg"] for r in rows), 1),
+        "days": days,
+    }
+    # by-day series aggregated across selected plants
+    by_day: Dict[str, Dict[str, float]] = {}
+    for r in rows:
+        d = by_day.setdefault(r["date"], {"kwh": 0.0, "cost": 0.0, "pf": 0.0, "n": 0})
+        d["kwh"] += r["kwh"]; d["cost"] += r["cost_inr"]; d["pf"] += r["power_factor"]; d["n"] += 1
+    series = [{"date": k, "kwh": round(v["kwh"], 1), "cost": round(v["cost"], 0),
+               "power_factor": round(v["pf"] / v["n"], 3) if v["n"] else 0} for k, v in sorted(by_day.items())]
+    # plant comparison (last 7d)
+    week_cutoff = (datetime.now(timezone.utc).date() - timedelta(days=6)).isoformat()
+    comp_rows = await db.energy_records.find(
+        {"tenant_id": user.tenant_id, "date": {"$gte": week_cutoff}}, {"_id": 0}
+    ).to_list(2000)
+    by_plant: Dict[str, Dict[str, Any]] = {}
+    for r in comp_rows:
+        d = by_plant.setdefault(r["plant_id"], {"plant_name": r["plant_name"], "kwh": 0, "cost": 0,
+                                                 "carbon": 0, "renewable": 0, "n": 0})
+        d["kwh"] += r["kwh"]; d["cost"] += r["cost_inr"]; d["carbon"] += r["carbon_kg"]
+        d["renewable"] += r["renewable_pct"]; d["n"] += 1
+    plant_comparison = [{"plant_id": k, "plant_name": v["plant_name"],
+                          "kwh": round(v["kwh"], 1), "cost": round(v["cost"], 0),
+                          "carbon": round(v["carbon"], 1),
+                          "renewable_pct": round(v["renewable"] / v["n"], 1) if v["n"] else 0}
+                         for k, v in by_plant.items()]
+    plant_comparison.sort(key=lambda x: -x["kwh"])
+    return {"kpis": kpis, "series": series, "plant_comparison": plant_comparison}
+
+
+# ---------------------------------------------------------------------------
+# OEE
+# ---------------------------------------------------------------------------
+
+
+@api.get("/oee/summary")
+async def oee_summary(user: User = Depends(require_module("OEE_APS")),
+                      plant_id: Optional[str] = None,
+                      days: int = 7):
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    plants_q: Dict[str, Any] = {"tenant_id": user.tenant_id}
+    if plant_id and plant_id != "all":
+        plants_q["plant_id"] = plant_id
+
+    lines = await db.lines.find(plants_q, {"_id": 0}).to_list(200)
+    downtimes = await db.downtime_events.find(
+        {"tenant_id": user.tenant_id, "started_at": {"$gte": cutoff},
+         **({"plant_id": plant_id} if plant_id and plant_id != "all" else {})},
+        {"_id": 0}
+    ).to_list(1000)
+    productions = await db.production_log.find(
+        {"tenant_id": user.tenant_id, "ts": {"$gte": cutoff}}, {"_id": 0}
+    ).to_list(2000)
+
+    # shift assumption
+    shifts_per_day = 3
+    minutes_per_shift = 480
+    total_planned = days * shifts_per_day * minutes_per_shift
+
+    def score(produced, good, downtime_min, ideal_per_hr, planned_min):
+        planned = max(1, planned_min)
+        availability = max(0.0, (planned - downtime_min) / planned)
+        run_time = max(1, planned - downtime_min)
+        ideal = ideal_per_hr * (run_time / 60)
+        performance = min(1.0, produced / ideal) if ideal else 0
+        quality = (good / produced) if produced else 1.0
+        oee = availability * performance * quality
+        return {
+            "availability": round(availability * 100, 1),
+            "performance": round(performance * 100, 1),
+            "quality": round(quality * 100, 1),
+            "oee": round(oee * 100, 1),
+        }
+
+    # per-line
+    lines_out = []
+    seed = random.Random(42)
+    for ln in lines:
+        line_downtime = sum(d["duration_min"] for d in downtimes if d.get("plant_id") == ln["plant_id"]) // max(1, len(lines))
+        line_prod = sum(p["produced"] for p in productions) // max(1, len(lines))
+        line_good = sum(p["good"] for p in productions) // max(1, len(lines))
+        # mix in a small deterministic variance per line
+        variance = (seed.random() - 0.5) * 0.15
+        base = score(line_prod, line_good, line_downtime, ln.get("ideal_rate_per_hr", 60), total_planned // max(1, len(lines)))
+        base = {k: max(0, min(100, round(v * (1 + variance), 1))) for k, v in base.items()}
+        lines_out.append({"line_id": ln["id"], "line_name": ln["name"], **base,
+                          "downtime_min": line_downtime, "produced": line_prod, "good": line_good})
+
+    # overall
+    all_downtime = sum(d["duration_min"] for d in downtimes)
+    all_prod = sum(p["produced"] for p in productions)
+    all_good = sum(p["good"] for p in productions)
+    overall = score(all_prod, all_good, all_downtime, 60, total_planned)
+
+    # trend last N days
+    trend = []
+    for i in range(days - 1, -1, -1):
+        day = (datetime.now(timezone.utc).date() - timedelta(days=i)).isoformat()
+        day_prod = sum(p["produced"] for p in productions if p["ts"].startswith(day))
+        day_good = sum(p["good"] for p in productions if p["ts"].startswith(day))
+        day_dt = sum(d["duration_min"] for d in downtimes if d["started_at"].startswith(day))
+        s = score(day_prod, day_good, day_dt, 60, shifts_per_day * minutes_per_shift)
+        trend.append({"date": day, **s})
+
+    # downtime breakdown by reason
+    reasons: Dict[str, int] = {}
+    for d in downtimes:
+        reasons[d["reason"]] = reasons.get(d["reason"], 0) + d["duration_min"]
+    reason_breakdown = [{"reason": k, "minutes": v} for k, v in
+                        sorted(reasons.items(), key=lambda x: -x[1])]
+
+    return {
+        "overall": overall,
+        "lines": lines_out,
+        "trend": trend,
+        "downtime_breakdown": reason_breakdown,
+        "totals": {"produced": all_prod, "good": all_good, "reject": all_prod - all_good,
+                   "downtime_min": all_downtime, "days": days},
+    }
 
 
 # ---------------------------------------------------------------------------

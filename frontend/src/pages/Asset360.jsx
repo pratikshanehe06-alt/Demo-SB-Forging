@@ -4,9 +4,11 @@ import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useTelemetryStream } from "@/lib/ws";
 import { StatusPill } from "@/components/Pills";
+import MaintenancePanel from "@/components/MaintenancePanel";
 import {
   Thermometer, Activity, Zap, Gauge as GaugeIcon, Power, Battery,
-  Factory, ArrowLeft, Wifi, WifiOff, RotateCw
+  Factory, ArrowLeft, Wifi, WifiOff, RotateCw, MapPin, Droplet,
+  Clock, AlertTriangle, TrendingUp, Wrench
 } from "lucide-react";
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts";
 import { motion, AnimatePresence } from "framer-motion";
@@ -15,6 +17,7 @@ export default function Asset360() {
   const { id } = useParams();
   const { token } = useAuth();
   const [asset, setAsset] = useState(null);
+  const [metrics, setMetrics] = useState(null);
   const [tele, setTele] = useState({});
   const [history, setHistory] = useState([]);
   const [flash, setFlash] = useState({});
@@ -23,14 +26,16 @@ export default function Asset360() {
 
   useEffect(() => {
     async function load() {
-      const [{ data: a }, { data: t }, { data: h }] = await Promise.all([
+      const [{ data: a }, { data: t }, { data: h }, { data: m }] = await Promise.all([
         api.get(`/assets/${id}`),
         api.get(`/assets/${id}/telemetry/latest`),
         api.get(`/assets/${id}/telemetry/history`, { params: { limit: 60 } }),
+        api.get(`/assets/${id}/metrics`),
       ]);
       setAsset(a);
       setTele(t || {});
       setHistory(h);
+      setMetrics(m);
     }
     load();
   }, [id]);
@@ -68,6 +73,7 @@ export default function Asset360() {
     { key: "vibration", label: "Vibration", unit: "mm/s", icon: Activity, color: "text-amber-600" },
     { key: "pressure", label: "Pressure", unit: "bar", icon: GaugeIcon, color: "text-blue-600" },
     { key: "rpm", label: "RPM", unit: "", icon: RotateCw, color: "text-purple-600" },
+    { key: "flow", label: "Flow", unit: "l/min", icon: Droplet, color: "text-cyan-600" },
     { key: "voltage", label: "Voltage", unit: "V", icon: Zap, color: "text-yellow-600" },
     { key: "current", label: "Current", unit: "A", icon: Zap, color: "text-orange-600" },
     { key: "power", label: "Power", unit: "kW", icon: Power, color: "text-emerald-600" },
@@ -184,6 +190,16 @@ export default function Asset360() {
         ))}
       </div>
 
+      {/* APM metrics */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3" data-testid="apm-metrics">
+        <ApmStat label="Runtime" value={metrics?.runtime_hours ?? 0} unit="h" icon={Clock} color="text-slate-700" />
+        <ApmStat label="Failures" value={metrics?.failure_count ?? 0} icon={AlertTriangle} color="text-red-600" />
+        <ApmStat label="MTBF" value={metrics?.mtbf_hours ?? 0} unit="h" icon={TrendingUp} color="text-emerald-700" />
+        <ApmStat label="MTTR" value={metrics?.mttr_hours ?? 0} unit="h" icon={Wrench} color="text-amber-700" />
+        <ApmStat label="Downtime" value={metrics?.downtime_min_total ?? 0} unit="min" icon={Clock} color="text-orange-700" />
+        <ApmStat label="Maint. Cost YTD" value={`₹${(metrics?.maintenance_cost_ytd || 0).toLocaleString()}`} icon={Wrench} color="text-blue-700" />
+      </div>
+
       {/* Trend chart */}
       <div className="bg-white rounded-lg border border-[color:var(--border)] p-5">
         <div className="flex items-center justify-between mb-3">
@@ -213,6 +229,26 @@ export default function Asset360() {
         <Meta label="Installation" value={asset.installation_date || "—"} />
         <Meta label="Last Seen" value={asset.last_seen ? new Date(asset.last_seen).toLocaleString() : "—"} />
         <Meta label="Criticality" value={asset.criticality} />
+        <div className="md:col-span-4 flex items-center gap-2 pt-2 border-t">
+          <MapPin className="h-4 w-4 text-slate-500" />
+          <span className="text-slate-700 font-medium">{asset.location || `${asset.plant_name} · ${asset.area_name}`}</span>
+        </div>
+      </div>
+
+      <MaintenancePanel assetId={asset.id} />
+    </div>
+  );
+}
+
+function ApmStat({ label, value, unit, icon: Icon, color }) {
+  return (
+    <div className="bg-white rounded-lg border border-[color:var(--border)] p-4">
+      <div className="flex items-center justify-between">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">{label}</span>
+        <Icon className={`h-4 w-4 ${color}`} />
+      </div>
+      <div className="mt-2 font-mono font-bold text-xl tabular text-slate-900">
+        {value}{unit && <span className="text-xs font-medium text-slate-500 ml-1">{unit}</span>}
       </div>
     </div>
   );

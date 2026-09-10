@@ -1,0 +1,46 @@
+{
+  "summary": "Iteration 4 tested end-to-end. Backend pytest suite /app/backend/tests/test_iteration4.py: 22/23 pass. One real bug: GET /api/energy/summary?plant_id=<X> does NOT narrow the plant_comparison array — spec expects 1 plant but server returns all 3 (server.py energy_summary comp_rows query ignores plant_id filter). Iteration 1-3 regression suite (backend_test.py + test_iteration3.py) still green (52/52). Frontend verified: Super Admin login lands on /platform showing 'PLATFORM SUPER ADMIN' banner + 3 tenant rows (PLATFORM/SBF/ABC) + KPI cards (TENANTS=3, USERS=8, PLANTS=3, ASSETS=61); 'New tenant' dialog creates UITEST tenant with success toast 'Tenant UITEST created' and row appears (delete not visually confirmed via UI in this run because icon confirm dialog was already dismissed, but backend DELETE ok:true and dup-code=409 and platform-delete=400 all pass). Tenant Admin sidebar shows all 9 expected links (Dashboard, CXO Board, Assets, Asset Hierarchy, Users, Module Access, OEE & APS, EEMS, Audit Logs). EEMS page /eems renders 8 KPI cards (Energy 132,971.2 kWh, Cost ₹1,249,929, Peak 397.8kW, Carbon 109.0 tons, PF 0.914, THD 3.72%, Renewable 17.5%, Days 7), consumption+cost line chart, Power Factor trend, Plant comparison bar chart; range dropdown 'Last 7 Days / Last 30 Days' opens correctly (shadcn Select, not native). OEE page /oee renders Overall OEE gauge (16.5%), A×P×Q radial (Availability 92.3%, Performance 19.1%, Quality 93.6%), Totals card (Produced 1,775, Good 1,662, Reject 113, Downtime 773 min), OEE trend chart, Downtime by reason bar (Tool change, Breakdown, Material shortage, Setup, No operator), Lines leaderboard with 5 rows (Forge Line 1/2, Anneal Line, Temper Line, +1). Audit Logs page /audit renders 14 events with colored badges (Alarm acknowledged, User created, User updated, User deactivated, Module toggled) — table has search input + action filter dropdown. Users page /users add flow: fill Name/Email/Password + role Operator + Save → toast 'User created' + new row appears; Edit via pencil icon → name saved as 'QA UI Renamed2'; Deactivate via person-off icon → row shows Inactive. Machine dialog for operator@sbforgtech.com opens with title 'Assign machine to Suresh Patil' and asset combobox (62 options). All backend audit-log entries (user.create/user.update/user.deactivate/alarm.ack/module.toggle) recorded and filterable via ?action and ?q. Modules EEMS/OEE_APS gates verified: disable→403, then re-enabled. Duplicate email→409, supervisor POST user→403, delete self→400, last-TA→400, assign self→400, delete PLATFORM tenant→400, dup tenant code→409 all verified.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "GET /api/energy/summary?plant_id={id}", "issue": "plant_comparison array still returns all 3 plants when plant_id filter is applied. The comp_rows query in server.py energy_summary() (line ~1564) hard-codes {'tenant_id': user.tenant_id, 'date': {'$gte': week_cutoff}} and never merges plant_id filter. Spec (iteration 4) requires the comparison to narrow to just the selected plant.", "priority": "HIGH"}
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Users list", "issues": ["Row actions Edit / Deactivate use icon-only buttons with no data-testid or aria-label — hard to target in tests. Consider aria-label='Edit user' / 'Deactivate user' or add data-testid=user-row-edit / user-row-deactivate."]},
+      {"screen": "EEMS + OEE range switcher", "issues": ["Uses shadcn Select (custom button + combobox popover) — this is fine visually but native <select> would be zero-JS. Confirmed working after clicking the trigger button; not a bug, just a testing note."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration4.py",
+    "/app/backend/tests/test_iteration3.py",
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/iter4_results.xml"
+  ],
+  "action_items": [
+    "Fix /api/energy/summary comp_rows query to honor plant_id filter (merge {'plant_id': plant_id} into comp_rows find when plant_id is provided). One-line change around server.py:1564.",
+    "Add data-testid or aria-label attributes to Users row Edit/Deactivate icon buttons to improve future automated testing (already flagged in prior iterations)."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now ~1853 lines — still needs to be split into routers (platform.py, energy.py, oee.py, audit.py, users.py). Guideline threshold is 700.",
+    "energy_summary() computes plant_comparison over a hard-coded 7-day window regardless of the ?range param — the chart label correctly reads 'Plant comparison (last 7 days)' but the KPI cards use the requested range, so users switching to 30d see inconsistent scopes. Consider using the same window OR make the label dynamic.",
+    "platform_delete_tenant() hard-deletes across 13 collections in a loop without a session/transaction — a partial failure would leave orphaned data. Wrap in a client_session().start_transaction() or at minimum log and continue.",
+    "TenantCreate.admin_password is unvalidated (no min length / complexity). All other password-accepting endpoints have the same gap. Add pydantic constr(min_length=6) or explicit validation.",
+    "record_audit is fire-and-forget awaited inline in the request path. For high-frequency actions (alarm ack under a storm) this doubles DB writes per request; consider a background queue.",
+    "PlatformAdmin.jsx renders outside the shared Layout via BareProtected — good, but header 'Platform Admin' user block appears clipped in top-right (visible in screenshot with only 'Platform Admi' and a partial 'n' under nav bar). Minor CSS clip.",
+    "AuditPage renders 'entity_id' truncated with '…' — hover-title would help admins copy the full id."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration4.py (new)"
+  ],
+  "success_rate": {"backend": "95.7% (22/23 iteration-4 + 100% iter-1/2/3 regression)", "frontend": "100% of tested iteration-4 flows"},
+  "test_credentials": "From /app/memory/test_credentials.md. PLATFORM/superadmin@coreot.com/Super@123, SBF/tenantadmin@sbforgtech.com/Admin@123, etc. INGEST_KEY read from /app/backend/.env (value not logged).",
+  "seed_data_creation": "Created via API and cleaned up: UITEST tenant (create + delete verified via UI+API). Left behind in SBF users collection: soft-deactivated Operator 'QA Renamed' (qa+*@sbf.com) and 'QA UI Renamed2' (qa1789072548@sbf.com) — both inactive, not affecting downstream tests.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "The only functional gap is the plant_id filter on /api/energy/summary — expected to narrow plant_comparison but returns all 3. All UI flows work. If you need to test the Users icon-buttons, target row buttons by index: btns.nth(-2) = Edit (pencil), btns.nth(-1) = Deactivate. Machine assign dialog uses shadcn combobox (role='combobox') with 62 options. EEMS/OEE range switch uses shadcn Select — click the button then click role='option'. Ended state: EEMS & OEE_APS modules re-enabled; REPORTS was toggled true during audit tests (leave as-is).",
+  "rca of the issue": "energy_summary() builds two separate DB queries: (1) `q` for the KPIs+series, which correctly appends {'plant_id': plant_id}; and (2) `comp_rows` for plant_comparison, which is a fresh find({'tenant_id': ..., 'date': {'$gte': week_cutoff}}) and never picks up plant_id. Merging plant_id into the comp_rows filter (or, more correctly, keeping comp_rows unfiltered but excluding it from the returned payload when plant_id is set) will satisfy the spec."
+}

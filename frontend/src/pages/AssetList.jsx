@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { usePlant } from "@/lib/plantContext";
-import { Plus, MoreHorizontal } from "lucide-react";
+import { Plus, MoreHorizontal, GitCompareArrows } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue
@@ -23,6 +23,7 @@ export default function AssetListPage() {
   const [page, setPage] = useState(1);
   const [openAdd, setOpenAdd] = useState(false);
   const { params: plantParams, selectedPlantId } = usePlant();
+  const navigate = useNavigate();
 
   async function load() {
     const params = { ...plantParams };
@@ -57,6 +58,9 @@ export default function AssetListPage() {
           <FilterSelect label="Status" testid="filter-status" value={filters.status} onChange={(v) => setFilters((f) => ({ ...f, status: v }))}
             options={["all", "RUNNING", "IDLE", "FAULT", "OFFLINE", "WARNING", "CRITICAL", "STOPPED"].map((s) => ({ value: s, label: s === "all" ? "All" : s }))} />
           <div className="flex-1" />
+          <Button variant="outline" onClick={() => navigate("/assets/compare")} data-testid="compare-link-btn">
+            <GitCompareArrows className="h-4 w-4 mr-1" /> Compare
+          </Button>
           <Button onClick={() => setOpenAdd(true)} data-testid="add-asset-btn" className="bg-[color:var(--brand-navy)] hover:bg-[color:var(--brand-navy-deep)]">
             <Plus className="h-4 w-4 mr-1" /> Add Asset
           </Button>

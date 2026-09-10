@@ -14,14 +14,16 @@ import { toast } from "sonner";
 const DEMO_TENANTS = [
   { code: "SBF", name: "SB Forgtech Pvt Ltd" },
   { code: "ABC", name: "ABC Manufacturing Pvt Ltd" },
+  { code: "PLATFORM", name: "CoreOT Platform (Super Admin)" },
 ];
 
 const DEMO_CREDS = [
-  { role: "Tenant Admin", email: "tenantadmin@sbforgtech.com", pwd: "Admin@123" },
-  { role: "CXO", email: "cxo@sbforgtech.com", pwd: "Cxo@123" },
-  { role: "Production Manager", email: "production@sbforgtech.com", pwd: "Prod@123" },
-  { role: "Supervisor", email: "supervisor@sbforgtech.com", pwd: "Super@123" },
-  { role: "Operator", email: "operator@sbforgtech.com", pwd: "Operator@123" },
+  { role: "Super Admin", email: "superadmin@coreot.com", pwd: "Super@123", tenant: "PLATFORM" },
+  { role: "Tenant Admin", email: "tenantadmin@sbforgtech.com", pwd: "Admin@123", tenant: "SBF" },
+  { role: "CXO", email: "cxo@sbforgtech.com", pwd: "Cxo@123", tenant: "SBF" },
+  { role: "Production Manager", email: "production@sbforgtech.com", pwd: "Prod@123", tenant: "SBF" },
+  { role: "Supervisor", email: "supervisor@sbforgtech.com", pwd: "Super@123", tenant: "SBF" },
+  { role: "Operator", email: "operator@sbforgtech.com", pwd: "Operator@123", tenant: "SBF" },
 ];
 
 export default function LoginPage() {
@@ -40,7 +42,11 @@ export default function LoginPage() {
     try {
       const u = await login(tenantCode, email, password);
       toast.success("Welcome back");
-      const dest = u.role === "OPERATOR" ? "/operator" : u.role === "CXO" ? "/cxo" : "/dashboard";
+      const dest =
+        u.role === "OPERATOR" ? "/operator"
+        : u.role === "CXO" ? "/cxo"
+        : u.role === "PLATFORM_SUPER_ADMIN" ? "/platform"
+        : "/dashboard";
       navigate(dest);
     } catch (err) {
       toast.error(err.response?.data?.detail || "Login failed");
@@ -52,7 +58,7 @@ export default function LoginPage() {
   function fillDemo(c) {
     setEmail(c.email);
     setPassword(c.pwd);
-    setTenantCode("SBF");
+    setTenantCode(c.tenant || "SBF");
   }
 
   return (

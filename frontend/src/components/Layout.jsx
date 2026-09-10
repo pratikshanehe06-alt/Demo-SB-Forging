@@ -23,27 +23,29 @@ function navFor(role, modules) {
   }
   if (role === "TENANT_ADMIN") items.push({ to: "/cxo", label: "CXO Board", icon: TrendingUp });
 
-  // APM-gated
+  // APM section
   if (modules?.APM !== false) {
-    items.push({ to: "/assets", label: "Assets", icon: Boxes });
-    items.push({ to: "/assets/hierarchy", label: "Asset Hierarchy", icon: Network });
+    items.push({
+      section: "APM", label: "APM", icon: Boxes,
+      children: [
+        { to: "/assets", label: "Assets", icon: Boxes },
+        { to: "/assets/hierarchy", label: "Asset Hierarchy", icon: Network },
+        { to: "/assets/compare", label: "Asset Comparison", icon: TrendingUp },
+      ],
+    });
   }
   // Users - Tenant Admin, Supervisor, Production Manager
   if (["TENANT_ADMIN", "SUPERVISOR", "PRODUCTION_MANAGER"].includes(role)) {
     items.push({ to: "/users", label: "Users", icon: Users });
   }
-  // Module Access (Tenant Admin only)
-  if (role === "TENANT_ADMIN") {
-    items.push({ to: "/modules", label: "Module Access", icon: ToggleRight });
-  }
-  // Optional module-gated placeholders (disabled UI stubs)
-  if (modules?.OEE_APS) items.push({ to: "/oee", label: "OEE & APS", icon: Settings, disabled: true });
-  if (modules?.EEMS) items.push({ to: "/eems", label: "EEMS", icon: FileBarChart2, disabled: true });
+  if (role === "TENANT_ADMIN") items.push({ to: "/modules", label: "Module Access", icon: ToggleRight });
+
+  if (modules?.OEE_APS) items.push({ to: "/oee", label: "OEE & APS", icon: Settings });
+  if (modules?.EEMS) items.push({ to: "/eems", label: "EEMS", icon: FileBarChart2 });
   if (modules?.AI_COPILOT) items.push({ to: "/copilot", label: "AI Copilot", icon: ShieldCheck, disabled: true });
   if (modules?.REPORTS) items.push({ to: "/reports", label: "Reports", icon: FileBarChart2, disabled: true });
-  if (modules?.AUDIT) items.push({ to: "/audit", label: "Audit Logs", icon: KeyRound, disabled: true });
+  if (modules?.AUDIT && role === "TENANT_ADMIN") items.push({ to: "/audit", label: "Audit Logs", icon: KeyRound });
 
-  // Always shown (universal admin utilities)
   items.push({ to: "/alarms", label: "Alarms", icon: BellRing, disabled: true });
   items.push({ to: "/work-orders", label: "Work Orders", icon: ClipboardList, disabled: true });
   items.push({ to: "/settings", label: "Settings", icon: Settings, disabled: true });
@@ -195,22 +197,63 @@ export default function Layout({ children }) {
           </div>
           <nav className="flex flex-col gap-0.5">
             {NAV.map((item) => (
-              <NavLink
-                key={item.to + item.label}
-                to={item.to}
-                end
-                data-testid={`nav-${item.label.toLowerCase().replace(/[\s&]+/g, "-")}`}
-                className={({ isActive }) => cn("side-item", isActive && "active", item.disabled && "opacity-50 pointer-events-none")}
-              >
-                <item.icon className="h-4 w-4" />
-                <span>{item.label}</span>
-              </NavLink>
+              item.section ? (
+                <SidebarSection key={item.section} item={item} />
+              ) : (
+                <NavLink
+                  key={item.to + item.label}
+                  to={item.to}
+                  end
+                  data-testid={`nav-${item.label.toLowerCase().replace(/[\s&]+/g, "-")}`}
+                  className={({ isActive }) => cn("side-item", isActive && "active", item.disabled && "opacity-50 pointer-events-none")}
+                >
+                  <item.icon className="h-4 w-4" />
+                  <span>{item.label}</span>
+                </NavLink>
+              )
             ))}
           </nav>
         </aside>
 
         <main className="flex-1 p-6 overflow-x-hidden">{children}</main>
       </div>
+    </div>
+  );
+}
+
+function SidebarSection({ item }) {
+  const location = typeof window !== "undefined" ? window.location.pathname : "";
+  const activeInSection = item.children.some((c) => location === c.to || location.startsWith(c.to + "/"));
+  const [open, setOpen] = useState(activeInSection);
+  return (
+    <div className="mt-1">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        data-testid={`nav-section-${item.section.toLowerCase()}`}
+        className={cn("side-item w-full justify-between", activeInSection && "active")}
+      >
+        <span className="flex items-center gap-2.5">
+          <item.icon className="h-4 w-4" />
+          <span className="font-semibold">{item.label}</span>
+        </span>
+        <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", open && "rotate-180")} />
+      </button>
+      {open && (
+        <div className="mt-0.5 ml-3 pl-2 border-l border-slate-200 flex flex-col gap-0.5">
+          {item.children.map((c) => (
+            <NavLink
+              key={c.to}
+              to={c.to}
+              end
+              data-testid={`nav-${c.label.toLowerCase().replace(/[\s&]+/g, "-")}`}
+              className={({ isActive }) => cn("side-item text-[13px]", isActive && "active")}
+            >
+              <c.icon className="h-3.5 w-3.5" />
+              <span>{c.label}</span>
+            </NavLink>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

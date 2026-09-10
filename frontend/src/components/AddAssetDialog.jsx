@@ -21,7 +21,7 @@ export default function AddAssetDialog({ open, onOpenChange, onCreated }) {
   const [form, setForm] = useState({
     asset_code: "", name: "", asset_type: "CNC Machine",
     plant_id: "", area_id: "", manufacturer: "", model: "",
-    serial: "", criticality: "MEDIUM", status: "OFFLINE", health: 100,
+    serial: "", location: "", criticality: "MEDIUM", status: "OFFLINE", health: 100,
   });
 
   useEffect(() => {
@@ -78,6 +78,7 @@ export default function AddAssetDialog({ open, onOpenChange, onCreated }) {
           <F label="Manufacturer"><Input value={form.manufacturer} onChange={(e) => set("manufacturer", e.target.value)} /></F>
           <F label="Model"><Input value={form.model} onChange={(e) => set("model", e.target.value)} /></F>
           <F label="Serial"><Input value={form.serial} onChange={(e) => set("serial", e.target.value)} /></F>
+          <F label="Location"><Input data-testid="new-asset-location" value={form.location} onChange={(e) => set("location", e.target.value)} placeholder="e.g. Pune, MH · Bay 3" /></F>
           <F label="Criticality">
             <Select value={form.criticality} onValueChange={(v) => set("criticality", v)}>
               <SelectTrigger className="bg-white"><SelectValue /></SelectTrigger>

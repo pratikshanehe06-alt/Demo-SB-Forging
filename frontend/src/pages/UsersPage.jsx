@@ -5,11 +5,13 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue
 } from "@/components/ui/select";
 import { toast } from "sonner";
-import { UserCog, Wrench } from "lucide-react";
+import { UserCog, UserPlus, Pencil, UserX, Wrench } from "lucide-react";
 
 const ROLE_LABEL = {
   TENANT_ADMIN: "Tenant Admin",
@@ -18,7 +20,6 @@ const ROLE_LABEL = {
   SUPERVISOR: "Supervisor",
   OPERATOR: "Operator",
 };
-
 const ROLE_BADGE = {
   TENANT_ADMIN: "bg-indigo-50 text-indigo-700 border-indigo-200",
   CXO: "bg-purple-50 text-purple-700 border-purple-200",
@@ -32,24 +33,39 @@ export default function UsersPage() {
   const [users, setUsers] = useState([]);
   const [assets, setAssets] = useState([]);
   const [assignTarget, setAssignTarget] = useState(null);
+  const [editTarget, setEditTarget] = useState(null);
+  const [openCreate, setOpenCreate] = useState(false);
 
   async function load() {
-    const [u, a] = await Promise.all([
-      api.get("/users"),
-      api.get("/assets"),
-    ]);
-    setUsers(u.data);
-    setAssets(a.data);
+    const [u, a] = await Promise.all([api.get("/users"), api.get("/assets").catch(() => ({ data: [] }))]);
+    setUsers(u.data); setAssets(a.data);
   }
   useEffect(() => { load(); }, []);
 
   const canAssign = ["TENANT_ADMIN", "SUPERVISOR"].includes(user?.role);
+  const canManage = user?.role === "TENANT_ADMIN";
+
+  async function deactivate(u) {
+    if (!window.confirm(`Deactivate ${u.name}?`)) return;
+    try {
+      await api.delete(`/users/${u.id}`);
+      toast.success("User deactivated");
+      load();
+    } catch (e) { toast.error(e.response?.data?.detail || "Delete failed"); }
+  }
 
   return (
     <div className="space-y-4" data-testid="users-page">
-      <div>
-        <h1 className="text-2xl font-display font-bold text-slate-900">Users</h1>
-        <p className="text-sm text-slate-500">Manage tenant users. Supervisors and Tenant Admins can assign machines to operators.</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-display font-bold text-slate-900">Users</h1>
+          <p className="text-sm text-slate-500">Manage tenant users. Supervisors and Tenant Admins can assign machines to operators.</p>
+        </div>
+        {canManage && (
+          <Button onClick={() => setOpenCreate(true)} data-testid="add-user-btn" className="bg-[color:var(--brand-navy)] hover:bg-[color:var(--brand-navy-deep)]">
+            <UserPlus className="h-4 w-4 mr-1" /> Add user
+          </Button>
+        )}
       </div>
 
       <div className="bg-white rounded-lg border border-[color:var(--border)] p-4">
@@ -59,14 +75,15 @@ export default function UsersPage() {
               <th className="py-3 px-2 font-semibold">Name</th>
               <th className="py-3 px-2 font-semibold">Email</th>
               <th className="py-3 px-2 font-semibold">Role</th>
-              <th className="py-3 px-2 font-semibold">Employee ID</th>
+              <th className="py-3 px-2 font-semibold">Employee</th>
               <th className="py-3 px-2 font-semibold">Assigned Machine</th>
+              <th className="py-3 px-2 font-semibold">Status</th>
               <th className="py-3 px-2 font-semibold text-right">Actions</th>
             </tr>
           </thead>
           <tbody>
             {users.map((u) => (
-              <tr key={u.id} className="data-row border-b last:border-0" data-testid={`user-row-${u.email}`}>
+              <tr key={u.id} className={`data-row border-b last:border-0 ${u.active === false ? "opacity-50" : ""}`} data-testid={`user-row-${u.email}`}>
                 <td className="py-3 px-2">
                   <div className="flex items-center gap-2">
                     <div className="h-8 w-8 rounded-full bg-slate-100 grid place-items-center text-xs font-semibold text-slate-700">
@@ -89,20 +106,32 @@ export default function UsersPage() {
                         <Wrench className="h-3.5 w-3.5 text-slate-500" />
                         <span className="font-medium">{u.assigned_asset.asset_code}</span>
                       </span>
-                    ) : (
-                      <span className="text-slate-400 text-xs italic">unassigned</span>
-                    )
-                  ) : (
-                    <span className="text-slate-400 text-xs">—</span>
-                  )}
+                    ) : <span className="text-slate-400 text-xs italic">unassigned</span>
+                  ) : <span className="text-slate-400 text-xs">—</span>}
                 </td>
-                <td className="py-3 px-2 text-right">
-                  {u.role === "OPERATOR" && canAssign ? (
+                <td className="py-3 px-2">
+                  <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${u.active === false ? "bg-slate-100 text-slate-500" : "bg-emerald-50 text-emerald-700"}`}>
+                    {u.active === false ? "Inactive" : "Active"}
+                  </span>
+                </td>
+                <td className="py-3 px-2 text-right space-x-1">
+                  {u.role === "OPERATOR" && canAssign && u.active !== false && (
                     <Button size="sm" variant="outline" data-testid={`assign-${u.email}`} onClick={() => setAssignTarget(u)}>
-                      <UserCog className="h-3.5 w-3.5 mr-1" />
-                      Assign machine
+                      <UserCog className="h-3.5 w-3.5 mr-1" /> Machine
                     </Button>
-                  ) : null}
+                  )}
+                  {canManage && u.id !== user.id && (
+                    <>
+                      <Button size="sm" variant="outline" data-testid={`edit-${u.email}`} onClick={() => setEditTarget(u)}>
+                        <Pencil className="h-3.5 w-3.5" />
+                      </Button>
+                      {u.active !== false && (
+                        <Button size="sm" variant="outline" data-testid={`deactivate-${u.email}`} onClick={() => deactivate(u)} className="text-red-600 border-red-200 hover:bg-red-50">
+                          <UserX className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
+                    </>
+                  )}
                 </td>
               </tr>
             ))}
@@ -110,53 +139,132 @@ export default function UsersPage() {
         </table>
       </div>
 
-      <AssignDialog
-        open={!!assignTarget}
-        target={assignTarget}
-        assets={assets}
-        onClose={() => setAssignTarget(null)}
-        onSaved={() => { setAssignTarget(null); load(); }}
-      />
+      <AssignDialog open={!!assignTarget} target={assignTarget} assets={assets}
+        onClose={() => setAssignTarget(null)} onSaved={() => { setAssignTarget(null); load(); }} />
+      <CreateUserDialog open={openCreate} onOpenChange={setOpenCreate} onCreated={load} />
+      <EditUserDialog target={editTarget} onClose={() => setEditTarget(null)} onSaved={() => { setEditTarget(null); load(); }} />
     </div>
   );
 }
 
 function AssignDialog({ open, target, assets, onClose, onSaved }) {
-  const [assetId, setAssetId] = useState(target?.assigned_asset_id || "");
+  const [assetId, setAssetId] = useState("none");
   useEffect(() => { setAssetId(target?.assigned_asset_id || "none"); }, [target]);
-
   async function save() {
     try {
       await api.put(`/users/${target.id}/assign`, { assigned_asset_id: assetId === "none" ? null : assetId });
-      toast.success("Machine assigned");
-      onSaved();
-    } catch (e) {
-      toast.error(e.response?.data?.detail || "Assignment failed");
-    }
+      toast.success("Machine assigned"); onSaved();
+    } catch (e) { toast.error(e.response?.data?.detail || "Assignment failed"); }
   }
-
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="bg-white">
         <DialogHeader><DialogTitle>Assign machine to {target?.name}</DialogTitle></DialogHeader>
         <div className="py-2">
-          <div className="text-xs uppercase tracking-wider font-semibold text-slate-600 mb-2">Machine</div>
+          <Label className="text-xs uppercase tracking-wider font-semibold text-slate-600">Machine</Label>
           <Select value={assetId} onValueChange={setAssetId}>
-            <SelectTrigger data-testid="assign-machine-select" className="bg-white"><SelectValue placeholder="Select" /></SelectTrigger>
+            <SelectTrigger data-testid="assign-machine-select" className="bg-white mt-1"><SelectValue placeholder="Select" /></SelectTrigger>
             <SelectContent className="bg-white max-h-72">
               <SelectItem value="none">— No machine —</SelectItem>
-              {assets.map((a) => (
-                <SelectItem key={a.id} value={a.id}>{a.asset_code} · {a.asset_type}</SelectItem>
-              ))}
+              {assets.map((a) => <SelectItem key={a.id} value={a.id}>{a.asset_code} · {a.asset_type}</SelectItem>)}
             </SelectContent>
           </Select>
-          <p className="text-xs text-slate-500 mt-3">The operator's runbook will re-target this machine on their next login.</p>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button data-testid="assign-save" onClick={save} className="bg-[color:var(--brand-navy)] hover:bg-[color:var(--brand-navy-deep)]">Save</Button>
+          <Button data-testid="assign-save" onClick={save} className="bg-[color:var(--brand-navy)]">Save</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function CreateUserDialog({ open, onOpenChange, onCreated }) {
+  const [form, setForm] = useState({ email: "", name: "", role: "OPERATOR", password: "", employee_id: "" });
+  function set(k, v) { setForm((f) => ({ ...f, [k]: v })); }
+  async function submit() {
+    if (!form.email || !form.name || !form.password) { toast.error("Name, email and password are required"); return; }
+    try {
+      await api.post("/users", form);
+      toast.success("User created");
+      onOpenChange(false); onCreated();
+      setForm({ email: "", name: "", role: "OPERATOR", password: "", employee_id: "" });
+    } catch (e) { toast.error(e.response?.data?.detail || "Create failed"); }
+  }
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="bg-white">
+        <DialogHeader><DialogTitle>Add user</DialogTitle></DialogHeader>
+        <div className="grid grid-cols-2 gap-4 py-2">
+          <F label="Full Name"><Input data-testid="new-user-name" value={form.name} onChange={(e) => set("name", e.target.value)} /></F>
+          <F label="Employee ID"><Input data-testid="new-user-empid" value={form.employee_id} onChange={(e) => set("employee_id", e.target.value)} /></F>
+          <F label="Email"><Input data-testid="new-user-email" type="email" value={form.email} onChange={(e) => set("email", e.target.value)} /></F>
+          <F label="Password"><Input data-testid="new-user-password" type="password" value={form.password} onChange={(e) => set("password", e.target.value)} /></F>
+          <F label="Role">
+            <Select value={form.role} onValueChange={(v) => set("role", v)}>
+              <SelectTrigger data-testid="new-user-role" className="bg-white"><SelectValue /></SelectTrigger>
+              <SelectContent className="bg-white">
+                {Object.entries(ROLE_LABEL).map(([k, v]) => <SelectItem key={k} value={k}>{v}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </F>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button data-testid="new-user-submit" onClick={submit} className="bg-[color:var(--brand-navy)]">Create user</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function EditUserDialog({ target, onClose, onSaved }) {
+  const [form, setForm] = useState({ name: "", role: "OPERATOR", employee_id: "", password: "" });
+  useEffect(() => {
+    if (target) setForm({ name: target.name || "", role: target.role || "OPERATOR", employee_id: target.employee_id || "", password: "" });
+  }, [target]);
+  function set(k, v) { setForm((f) => ({ ...f, [k]: v })); }
+
+  async function save() {
+    const payload = { name: form.name, role: form.role, employee_id: form.employee_id };
+    if (form.password) payload.password = form.password;
+    try {
+      await api.put(`/users/${target.id}`, payload);
+      toast.success("User updated"); onSaved();
+    } catch (e) { toast.error(e.response?.data?.detail || "Update failed"); }
+  }
+
+  return (
+    <Dialog open={!!target} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="bg-white">
+        <DialogHeader><DialogTitle>Edit {target?.name}</DialogTitle></DialogHeader>
+        <div className="grid grid-cols-2 gap-4 py-2">
+          <F label="Full Name"><Input data-testid="edit-user-name" value={form.name} onChange={(e) => set("name", e.target.value)} /></F>
+          <F label="Employee ID"><Input value={form.employee_id} onChange={(e) => set("employee_id", e.target.value)} /></F>
+          <F label="Role">
+            <Select value={form.role} onValueChange={(v) => set("role", v)}>
+              <SelectTrigger className="bg-white"><SelectValue /></SelectTrigger>
+              <SelectContent className="bg-white">
+                {Object.entries(ROLE_LABEL).map(([k, v]) => <SelectItem key={k} value={k}>{v}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </F>
+          <F label="Reset Password (optional)"><Input type="password" value={form.password} onChange={(e) => set("password", e.target.value)} placeholder="Leave blank to keep" /></F>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button data-testid="edit-user-save" onClick={save} className="bg-[color:var(--brand-navy)]">Save</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function F({ label, children }) {
+  return (
+    <div>
+      <Label className="text-xs uppercase tracking-wider font-semibold text-slate-600">{label}</Label>
+      <div className="mt-1">{children}</div>
+    </div>
   );
 }
