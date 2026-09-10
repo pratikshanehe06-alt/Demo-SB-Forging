@@ -1,7 +1,9 @@
 import { Link, NavLink, useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
 import {
   LayoutDashboard, Boxes, Network, Users, ShieldCheck, ToggleRight,
-  KeyRound, BellRing, FileBarChart2, ClipboardList, Settings, Search, Bell, LogOut, ChevronDown
+  KeyRound, BellRing, FileBarChart2, ClipboardList, Settings, Search, Bell, LogOut, ChevronDown,
+  TrendingUp, ShieldAlert
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import {
@@ -9,30 +11,51 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { api } from "@/lib/api";
+import { useTelemetryStream } from "@/lib/ws";
 
-const NAV = [
-  { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { to: "/assets", label: "Assets", icon: Boxes },
-  { to: "/assets/hierarchy", label: "Asset Hierarchy", icon: Network },
-  { to: "/users", label: "Users", icon: Users, disabled: true },
-  { to: "/roles", label: "Roles", icon: ShieldCheck, disabled: true },
-  { to: "/modules", label: "Module Access", icon: ToggleRight, disabled: true },
-  { to: "/fields", label: "Field Access", icon: KeyRound, disabled: true },
-  { to: "/alarms", label: "Alarms", icon: BellRing, disabled: true },
-  { to: "/reports", label: "Reports", icon: FileBarChart2, disabled: true },
-  { to: "/work-orders", label: "Work Orders", icon: ClipboardList, disabled: true },
-  { to: "/settings", label: "Settings", icon: Settings, disabled: true },
-];
+function navFor(role) {
+  const base = [];
+  if (role === "CXO") base.push({ to: "/cxo", label: "CXO Board", icon: TrendingUp });
+  if (["TENANT_ADMIN", "PRODUCTION_MANAGER", "SUPERVISOR"].includes(role)) base.push({ to: "/dashboard", label: "Dashboard", icon: LayoutDashboard });
+  if (role === "TENANT_ADMIN") base.push({ to: "/cxo", label: "CXO Board", icon: TrendingUp });
+  base.push(
+    { to: "/assets", label: "Assets", icon: Boxes },
+    { to: "/assets/hierarchy", label: "Asset Hierarchy", icon: Network },
+  );
+  base.push(
+    { to: "/users", label: "Users", icon: Users, disabled: true },
+    { to: "/roles", label: "Roles", icon: ShieldCheck, disabled: true },
+    { to: "/modules", label: "Module Access", icon: ToggleRight, disabled: true },
+    { to: "/fields", label: "Field Access", icon: KeyRound, disabled: true },
+    { to: "/alarms", label: "Alarms", icon: BellRing, disabled: true },
+    { to: "/reports", label: "Reports", icon: FileBarChart2, disabled: true },
+    { to: "/work-orders", label: "Work Orders", icon: ClipboardList, disabled: true },
+    { to: "/settings", label: "Settings", icon: Settings, disabled: true },
+  );
+  return base;
+}
 
 export default function Layout({ children }) {
-  const { user, tenant, logout } = useAuth();
+  const { user, tenant, logout, token } = useAuth();
   const navigate = useNavigate();
+  const [escalations, setEscalations] = useState([]);
+  const { subscribe } = useTelemetryStream(token);
+
+  useEffect(() => {
+    api.get("/escalations", { params: { limit: 20 } }).then((r) => setEscalations(r.data)).catch(() => {});
+    return subscribe((msg) => {
+      if (msg.type === "escalation") setEscalations((e) => [msg.event, ...e].slice(0, 20));
+    });
+  }, [subscribe]);
+
+  const NAV = navFor(user?.role);
 
   return (
     <div className="min-h-screen flex flex-col bg-[var(--workspace)]">
       {/* Top header */}
       <header className="h-16 bg-[color:var(--brand-navy)] text-white flex items-center px-6 shadow-sm">
-        <Link to="/dashboard" className="flex items-center gap-2 mr-8" data-testid="coreot-logo">
+        <Link to="/" className="flex items-center gap-2 mr-8" data-testid="coreot-logo">
           <div className="h-8 w-8 rounded-md bg-white/10 border border-white/20 grid place-items-center font-display font-black">C</div>
           <span className="font-display font-bold text-lg tracking-tight">CoreOT<sup className="text-[10px]">™</sup></span>
         </Link>
@@ -60,6 +83,36 @@ export default function Layout({ children }) {
             />
           </div>
         </div>
+
+        {/* Escalation bell */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button data-testid="escalations-btn" className="relative h-9 w-9 grid place-items-center rounded-md hover:bg-white/10 mr-1">
+              <ShieldAlert className="h-5 w-5" />
+              {escalations.length > 0 && (
+                <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] rounded-full bg-red-500 text-[10px] font-bold grid place-items-center border border-[color:var(--brand-navy)] px-1">
+                  {escalations.length > 9 ? "9+" : escalations.length}
+                </span>
+              )}
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-96 bg-white">
+            <DropdownMenuLabel className="flex items-center justify-between">
+              <span>Auto-Escalations</span>
+              <span className="text-[10px] text-slate-500 font-normal">Unacked &gt; 5 min</span>
+            </DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            {escalations.length === 0 ? (
+              <div className="p-3 text-sm text-slate-500 text-center">No escalations 🎉</div>
+            ) : escalations.slice(0, 8).map((e) => (
+              <DropdownMenuItem key={e.id} className="flex flex-col items-start gap-0.5 py-2">
+                <div className="text-xs uppercase tracking-wider font-semibold text-red-600">{e.severity} · {e.asset_code}</div>
+                <div className="text-sm font-medium text-slate-800">{e.message}</div>
+                <div className="text-[10px] text-slate-500">{new Date(e.escalated_at).toLocaleString()} · logged to {e.recipient}</div>
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
 
         <button data-testid="notif-btn" className="relative h-9 w-9 grid place-items-center rounded-md hover:bg-white/10">
           <Bell className="h-5 w-5" />
@@ -93,12 +146,12 @@ export default function Layout({ children }) {
         {/* Sidebar */}
         <aside className="w-60 bg-white border-r border-[color:var(--border)] py-4 px-3">
           <div className="text-[10px] uppercase tracking-[0.14em] font-semibold text-slate-400 px-3 mb-2">
-            Tenant Administration
+            {user?.role === "CXO" ? "Executive" : "Tenant Administration"}
           </div>
           <nav className="flex flex-col gap-0.5">
             {NAV.map((item) => (
               <NavLink
-                key={item.to}
+                key={item.to + item.label}
                 to={item.to}
                 end
                 data-testid={`nav-${item.label.toLowerCase().replace(/\s+/g, "-")}`}

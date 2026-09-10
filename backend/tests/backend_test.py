@@ -14,6 +14,22 @@ BASE_URL = BASE_URL.rstrip("/")
 WS_BASE = BASE_URL.replace("https://", "wss://").replace("http://", "ws://")
 
 CREDS = {"tenant_code": "SBF", "email": "tenantadmin@sbforgtech.com", "password": "Admin@123"}
+CXO_CREDS = {"tenant_code": "SBF", "email": "cxo@sbforgtech.com", "password": "Cxo@123"}
+OP_CREDS = {"tenant_code": "SBF", "email": "operator@sbforgtech.com", "password": "Operator@123"}
+
+
+def _read_ingest_key():
+    try:
+        for line in open("/app/backend/.env").read().splitlines():
+            if line.startswith("INGEST_KEY"):
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
+    except Exception:
+        pass
+    return ""
+
+
+INGEST_KEY = _read_ingest_key()
+INGEST_HEADERS = {"X-Ingest-Key": INGEST_KEY}
 
 
 @pytest.fixture(scope="session")
@@ -78,7 +94,7 @@ def test_dashboard_summary(headers):
     d = r.json()
     for k in ["total_assets", "running", "idle", "fault", "offline", "active_alarms", "critical_alarms"]:
         assert k in d["kpis"]
-    assert d["kpis"]["total_assets"] == 45
+    assert d["kpis"]["total_assets"] >= 45
     for k in ["healthy", "warning", "critical", "offline", "average"]:
         assert k in d["health_overview"]
     assert len(d["alarms_trend"]) == 7
@@ -92,7 +108,7 @@ def test_list_assets(headers):
     r = requests.get(f"{BASE_URL}/api/assets", headers=headers, timeout=15)
     assert r.status_code == 200
     lst = r.json()
-    assert len(lst) == 45
+    assert len(lst) >= 45
     a = lst[0]
     for k in ["asset_code", "name", "asset_type", "area_name", "status", "health"]:
         assert k in a
@@ -201,8 +217,21 @@ def test_plants(headers):
 
 
 # ---------- Telemetry ingest ----------
-def test_ingest_warning(headers):
+def test_ingest_requires_key():
     r = requests.post(f"{BASE_URL}/api/telemetry/ingest",
+                      json={"asset_code": "CNC-DEMO-01", "temperature": 70}, timeout=15)
+    assert r.status_code == 401
+
+
+def test_ingest_wrong_key():
+    r = requests.post(f"{BASE_URL}/api/telemetry/ingest",
+                      headers={"X-Ingest-Key": "not-the-right-key"},
+                      json={"asset_code": "CNC-DEMO-01", "temperature": 70}, timeout=15)
+    assert r.status_code == 401
+
+
+def test_ingest_warning(headers):
+    r = requests.post(f"{BASE_URL}/api/telemetry/ingest", headers=INGEST_HEADERS,
                       json={"asset_code": "CNC-DEMO-01", "temperature": 95, "rpm": 1500, "power": 10.5},
                       timeout=15)
     assert r.status_code == 200
@@ -214,7 +243,7 @@ def test_ingest_warning(headers):
 
 
 def test_ingest_critical():
-    r = requests.post(f"{BASE_URL}/api/telemetry/ingest",
+    r = requests.post(f"{BASE_URL}/api/telemetry/ingest", headers=INGEST_HEADERS,
                       json={"asset_code": "CNC-DEMO-01", "temperature": 105}, timeout=15)
     assert r.status_code == 200
     assert r.json()["status"] == "CRITICAL"
@@ -222,7 +251,7 @@ def test_ingest_critical():
 
 def test_ingest_alarm_creates_entry(headers):
     msg = f"TEST_ALARM_{uuid.uuid4().hex[:6]}"
-    r = requests.post(f"{BASE_URL}/api/telemetry/ingest",
+    r = requests.post(f"{BASE_URL}/api/telemetry/ingest", headers=INGEST_HEADERS,
                       json={"asset_code": "CNC-DEMO-01", "alarm": True, "alarm_message": msg},
                       timeout=15)
     assert r.status_code == 200
@@ -231,14 +260,14 @@ def test_ingest_alarm_creates_entry(headers):
 
 
 def test_ingest_stopped(headers):
-    r = requests.post(f"{BASE_URL}/api/telemetry/ingest",
+    r = requests.post(f"{BASE_URL}/api/telemetry/ingest", headers=INGEST_HEADERS,
                       json={"asset_code": "CNC-DEMO-01", "machine_status": "STOPPED"}, timeout=15)
     assert r.status_code == 200
     lst = requests.get(f"{BASE_URL}/api/assets", headers=headers, timeout=15).json()
     cnc = [a for a in lst if a["asset_code"] == "CNC-DEMO-01"][0]
     assert cnc["status"] == "STOPPED"
     # restore to RUNNING for later tests / simulator
-    requests.post(f"{BASE_URL}/api/telemetry/ingest",
+    requests.post(f"{BASE_URL}/api/telemetry/ingest", headers=INGEST_HEADERS,
                   json={"asset_code": "CNC-DEMO-01", "machine_status": "RUNNING", "temperature": 62},
                   timeout=15)
 
@@ -272,7 +301,7 @@ def test_ws_broadcast_on_ingest(token):
         url = f"{WS_BASE}/api/ws/telemetry?token={token}"
         async with websockets.connect(url) as ws:
             # trigger ingest
-            requests.post(f"{BASE_URL}/api/telemetry/ingest",
+            requests.post(f"{BASE_URL}/api/telemetry/ingest", headers=INGEST_HEADERS,
                           json={"asset_code": "CNC-DEMO-01", "temperature": 70,
                                 "machine_status": "RUNNING"}, timeout=10)
             # wait up to ~10s for a telemetry message
@@ -289,3 +318,118 @@ def test_ws_broadcast_on_ingest(token):
     data = asyncio.new_event_loop().run_until_complete(run())
     assert data is not None
     assert data["type"] == "telemetry"
+
+
+# ---------- Iteration 2: Ingest Key Guard ----------
+def test_ingest_with_correct_key():
+    assert INGEST_KEY, "INGEST_KEY missing in /app/backend/.env"
+    r = requests.post(f"{BASE_URL}/api/telemetry/ingest", headers=INGEST_HEADERS,
+                      json={"asset_code": "CNC-DEMO-01", "temperature": 65, "machine_status": "RUNNING"},
+                      timeout=15)
+    assert r.status_code == 200
+    d = r.json()
+    assert d.get("ok") is True
+
+
+def test_ingest_key_hint_tenant_admin(headers):
+    r = requests.get(f"{BASE_URL}/api/ingest/key-hint", headers=headers, timeout=15)
+    assert r.status_code == 200
+    d = r.json()
+    assert d["configured"] is True
+    assert "…" in d["hint"]
+    assert d["length"] > 0
+
+
+def _login(creds):
+    r = requests.post(f"{BASE_URL}/api/auth/login", json=creds, timeout=15)
+    assert r.status_code == 200, r.text
+    return r.json()["access_token"]
+
+
+@pytest.fixture(scope="session")
+def cxo_headers():
+    return {"Authorization": f"Bearer {_login(CXO_CREDS)}"}
+
+
+@pytest.fixture(scope="session")
+def op_headers():
+    return {"Authorization": f"Bearer {_login(OP_CREDS)}"}
+
+
+def test_ingest_key_hint_forbidden_for_cxo(cxo_headers):
+    r = requests.get(f"{BASE_URL}/api/ingest/key-hint", headers=cxo_headers, timeout=15)
+    assert r.status_code == 403
+
+
+# ---------- Iteration 2: CXO Comparison Board ----------
+def test_cxo_comparison(headers):
+    r = requests.get(f"{BASE_URL}/api/dashboard/cxo-comparison", headers=headers, timeout=15)
+    assert r.status_code == 200
+    lst = r.json()
+    assert isinstance(lst, list) and len(lst) == 3
+    names = {p["name"] for p in lst}
+    assert names == {"Pune Plant", "Mumbai Plant", "Nashik Plant"}
+    required = ["oee", "availability", "performance", "quality", "energy_kwh",
+                "energy_cost_inr", "carbon_kg", "avg_health", "running_pct",
+                "active_alarms", "total_assets"]
+    for p in lst:
+        for k in required:
+            assert k in p, f"missing {k} in {p['name']}"
+    # ordered by OEE desc
+    oees = [p["oee"] for p in lst]
+    assert oees == sorted(oees, reverse=True)
+
+
+def test_cxo_comparison_deterministic(headers):
+    r1 = requests.get(f"{BASE_URL}/api/dashboard/cxo-comparison", headers=headers, timeout=15).json()
+    r2 = requests.get(f"{BASE_URL}/api/dashboard/cxo-comparison", headers=headers, timeout=15).json()
+    map1 = {p["code"]: p["oee"] for p in r1}
+    map2 = {p["code"]: p["oee"] for p in r2}
+    assert map1 == map2
+
+
+# ---------- Iteration 2: Operator Runbook ----------
+def test_operator_my_machine(op_headers):
+    r = requests.get(f"{BASE_URL}/api/operator/my-machine", headers=op_headers, timeout=15)
+    assert r.status_code == 200
+    d = r.json()
+    assert d["asset"]["asset_code"] == "CNC-DEMO-01"
+    assert d["asset"]["plant_name"] == "Pune Plant"
+    assert "telemetry" in d
+    assert "alarms" in d
+
+
+def test_operator_my_machine_forbidden_for_admin(headers):
+    r = requests.get(f"{BASE_URL}/api/operator/my-machine", headers=headers, timeout=15)
+    assert r.status_code == 403
+
+
+def test_operator_production_updates_counters(op_headers):
+    my = requests.get(f"{BASE_URL}/api/operator/my-machine", headers=op_headers, timeout=15).json()
+    before = my.get("telemetry", {}) or {}
+    prev_prod = int(before.get("production_count", 0))
+    prev_good = int(before.get("good_count", 0))
+    r = requests.post(f"{BASE_URL}/api/operator/production", headers=op_headers,
+                      json={"produced": 5, "good": 5, "reject": 0}, timeout=15)
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    # give simulator a moment to write telemetry
+    time.sleep(1)
+    after = requests.get(f"{BASE_URL}/api/operator/my-machine", headers=op_headers, timeout=15).json()
+    tele = after.get("telemetry", {})
+    assert int(tele.get("production_count", 0)) >= prev_prod + 5
+    assert int(tele.get("good_count", 0)) >= prev_good + 5
+
+
+def test_operator_production_forbidden_for_admin(headers):
+    r = requests.post(f"{BASE_URL}/api/operator/production", headers=headers,
+                      json={"produced": 1, "good": 1, "reject": 0}, timeout=15)
+    assert r.status_code == 403
+
+
+# ---------- Iteration 2: Escalations ----------
+def test_escalations_list(headers):
+    r = requests.get(f"{BASE_URL}/api/escalations", headers=headers, timeout=15)
+    assert r.status_code == 200
+    assert isinstance(r.json(), list)
+

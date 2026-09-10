@@ -259,7 +259,10 @@
     "proxy": "",
     "authType": "",
     "senderr": false,
-    "headers": [{ "keyType": "Content-Type", "keyValue": "", "valueType": "application/json", "valueValue": "" }],
+    "headers": [
+      { "keyType": "Content-Type", "keyValue": "", "valueType": "application/json", "valueValue": "" },
+      { "keyType": "X-Ingest-Key", "keyValue": "", "valueType": "REPLACE_WITH_INGEST_KEY", "valueValue": "" }
+    ],
     "x": 800,
     "y": 300,
     "wires": [["debug"]]

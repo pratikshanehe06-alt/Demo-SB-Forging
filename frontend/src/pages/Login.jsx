@@ -38,9 +38,10 @@ export default function LoginPage() {
     e.preventDefault();
     setLoading(true);
     try {
-      await login(tenantCode, email, password);
+      const u = await login(tenantCode, email, password);
       toast.success("Welcome back");
-      navigate("/dashboard");
+      const dest = u.role === "OPERATOR" ? "/operator" : u.role === "CXO" ? "/cxo" : "/dashboard";
+      navigate(dest);
     } catch (err) {
       toast.error(err.response?.data?.detail || "Login failed");
     } finally {

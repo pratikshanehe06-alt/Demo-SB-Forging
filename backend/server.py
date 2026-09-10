@@ -13,6 +13,7 @@ import asyncio
 import logging
 import os
 import random
+import secrets
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -25,6 +26,7 @@ from fastapi import (
     APIRouter,
     Depends,
     FastAPI,
+    Header,
     HTTPException,
     Query,
     WebSocket,
@@ -48,6 +50,29 @@ DB_NAME = os.environ["DB_NAME"]
 JWT_SECRET = os.environ.get("JWT_SECRET", "coreot-dev-secret-change-me")
 JWT_ALG = "HS256"
 JWT_EXPIRES_MIN = 60 * 24 * 7  # 7 days
+
+ESCALATION_MINUTES = int(os.environ.get("ESCALATION_MINUTES", "5"))
+
+
+def ensure_ingest_key() -> str:
+    """Guarantee an INGEST_KEY exists; auto-generate + persist to backend/.env if missing."""
+    existing = os.environ.get("INGEST_KEY", "").strip()
+    if existing:
+        return existing
+    key = secrets.token_hex(24)
+    env_path = ROOT_DIR / ".env"
+    try:
+        content = env_path.read_text() if env_path.exists() else ""
+        if "INGEST_KEY=" not in content:
+            if content and not content.endswith("\n"):
+                content += "\n"
+            content += f'INGEST_KEY="{key}"\n'
+            env_path.write_text(content)
+    except Exception as exc:
+        logger.warning("Could not persist INGEST_KEY to .env: %s", exc)
+    os.environ["INGEST_KEY"] = key
+    logger.info("Generated CoreOT INGEST_KEY (add to Node-RED X-Ingest-Key header): %s", key)
+    return key
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -76,6 +101,7 @@ class User(BaseModel):
     employee_id: Optional[str] = None
     plants: List[str] = []
     active: bool = True
+    assigned_asset_id: Optional[str] = None
 
 
 class LoginRequest(BaseModel):
@@ -358,6 +384,48 @@ async def seed_database() -> None:
         }
     )
 
+    # Additional plants for CXO Comparison Board
+    other_plants: List[Dict[str, Any]] = []
+    for pname, pcode, ploc in [
+        ("Mumbai Plant", "MUM-01", "Mumbai, MH"),
+        ("Nashik Plant", "NSK-01", "Nashik, MH"),
+    ]:
+        pid = str(uuid.uuid4())
+        await db.plants.insert_one(
+            {"id": pid, "tenant_id": sbf, "name": pname, "code": pcode, "location": ploc}
+        )
+        # one flagship area per plant
+        aid = str(uuid.uuid4())
+        await db.areas.insert_one(
+            {"id": aid, "tenant_id": sbf, "plant_id": pid, "name": "Main Line"}
+        )
+        # seed a small asset pool for comparison KPIs
+        for i in range(8):
+            atype = random.choice(["Hydraulic Press", "Induction Furnace", "Air Compressor", "Water Chiller"])
+            st = random.choice(STATUS_POOL)
+            health_map = {"RUNNING": (75, 99), "IDLE": (60, 90), "FAULT": (30, 55), "OFFLINE": (0, 40)}
+            low, high = health_map.get(st, (50, 90))
+            await db.assets.insert_one(
+                {
+                    "id": str(uuid.uuid4()),
+                    "tenant_id": sbf,
+                    "plant_id": pid,
+                    "area_id": aid,
+                    "asset_code": f"{pcode}-{atype.split()[0][:3].upper()}-{i+1:02d}",
+                    "name": f"{atype} {i+1}",
+                    "asset_type": atype,
+                    "manufacturer": random.choice(["Siemens", "ABB", "Bosch"]),
+                    "model": f"M-{random.randint(100,999)}",
+                    "serial": f"SN-{random.randint(10000,99999)}",
+                    "criticality": random.choice(["LOW", "MEDIUM", "HIGH"]),
+                    "status": st,
+                    "health": random.randint(low, high),
+                    "installation_date": f"20{random.randint(19,23)}-06-01",
+                    "last_seen": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+        other_plants.append({"id": pid, "name": pname})
+
     area_ids: Dict[str, str] = {}
     for a in AREAS_SEED:
         aid = str(uuid.uuid4())
@@ -384,6 +452,12 @@ async def seed_database() -> None:
             "installation_date": "2022-04-10",
             "last_seen": datetime.now(timezone.utc).isoformat(),
         }
+    )
+
+    # Assign the CNC demo asset to the operator user for the Operator Runbook page
+    await db.users.update_one(
+        {"email": "operator@sbforgtech.com"},
+        {"$set": {"assigned_asset_id": cnc_demo_id}},
     )
 
     # Generate remaining assets to reach ~45 total
@@ -615,6 +689,57 @@ async def ingest_telemetry_internal(payload: TelemetryIn) -> Dict[str, Any]:
     return {"ok": True, "asset_id": asset["id"], "status": new_status, "health": health}
 
 
+async def escalation_scanner() -> None:
+    """Every 30s, escalate CRITICAL alarms unacknowledged for > ESCALATION_MINUTES.
+
+    Log-only escalation for now: create an entry in `escalations`, mark alarm as
+    escalated, broadcast a WS event so the UI can flag it. Swap the notifier for
+    Twilio/Telegram/Slack later without touching this scanner.
+    """
+    await asyncio.sleep(10)
+    while True:
+        try:
+            cutoff = (datetime.now(timezone.utc) - timedelta(minutes=ESCALATION_MINUTES)).isoformat()
+            cursor = db.alarms.find(
+                {
+                    "severity": "CRITICAL",
+                    "acknowledged": False,
+                    "escalated": {"$ne": True},
+                    "created_at": {"$lte": cutoff},
+                },
+                {"_id": 0},
+            )
+            async for alarm in cursor:
+                now = datetime.now(timezone.utc).isoformat()
+                await db.alarms.update_one(
+                    {"id": alarm["id"]},
+                    {"$set": {"escalated": True, "escalated_at": now}},
+                )
+                event = {
+                    "id": str(uuid.uuid4()),
+                    "tenant_id": alarm["tenant_id"],
+                    "alarm_id": alarm["id"],
+                    "asset_id": alarm["asset_id"],
+                    "asset_code": alarm["asset_code"],
+                    "severity": alarm["severity"],
+                    "message": alarm["message"],
+                    "channel": "log",
+                    "recipient": "on-call",
+                    "status": "logged",
+                    "escalated_at": now,
+                }
+                await db.escalations.insert_one(event.copy())
+                logger.warning(
+                    "ESCALATION [%s] alarm=%s asset=%s msg=%s (unacked >%dmin)",
+                    alarm["tenant_id"], alarm["id"], alarm["asset_code"], alarm["message"], ESCALATION_MINUTES,
+                )
+                event.pop("_id", None)
+                await ws_manager.broadcast(alarm["tenant_id"], {"type": "escalation", "event": event})
+        except Exception as exc:
+            logger.warning("Escalation scanner tick failed: %s", exc)
+        await asyncio.sleep(30)
+
+
 # ---------------------------------------------------------------------------
 # App lifespan
 # ---------------------------------------------------------------------------
@@ -622,16 +747,22 @@ async def ingest_telemetry_internal(payload: TelemetryIn) -> Dict[str, Any]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    ensure_ingest_key()
     await seed_database()
     # Ensure indexes
     await db.telemetry.create_index([("asset_id", 1), ("ts", -1)])
     await db.alarms.create_index([("tenant_id", 1), ("created_at", -1)])
     await db.assets.create_index([("tenant_id", 1)])
-    task = asyncio.create_task(telemetry_simulator())
+    await db.escalations.create_index([("tenant_id", 1), ("escalated_at", -1)])
+    tasks = [
+        asyncio.create_task(telemetry_simulator()),
+        asyncio.create_task(escalation_scanner()),
+    ]
     try:
         yield
     finally:
-        task.cancel()
+        for t in tasks:
+            t.cancel()
         client.close()
 
 
@@ -904,14 +1035,165 @@ async def list_plants(user: User = Depends(get_current_user)):
 
 
 @api.post("/telemetry/ingest")
-async def telemetry_ingest(payload: TelemetryIn):
-    """Public ingest endpoint for Node-RED / OT gateway.
-
-    Auth is done via a shared INGEST_KEY header check when configured;
-    left open for the demo so Node-RED can be plugged in easily. In prod
-    replace with mTLS or MQTT bridge auth.
+async def telemetry_ingest(
+    payload: TelemetryIn,
+    x_ingest_key: Annotated[Optional[str], Header(alias="X-Ingest-Key")] = None,
+):
+    """Ingest endpoint for Node-RED / OT gateway. Requires X-Ingest-Key header
+    matching the server's INGEST_KEY (auto-generated on first boot and stored in backend/.env).
     """
+    expected = os.environ.get("INGEST_KEY", "")
+    if not expected or not x_ingest_key or not secrets.compare_digest(x_ingest_key, expected):
+        raise HTTPException(status_code=401, detail="Invalid or missing X-Ingest-Key")
     return await ingest_telemetry_internal(payload)
+
+
+@api.get("/ingest/key-hint")
+async def ingest_key_hint(user: User = Depends(get_current_user)):
+    """Return a masked hint of the current ingest key (tenant admins only)."""
+    if user.role != "TENANT_ADMIN":
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    key = os.environ.get("INGEST_KEY", "")
+    if not key:
+        return {"configured": False}
+    return {"configured": True, "hint": f"{key[:6]}…{key[-4:]}", "length": len(key)}
+
+
+# ---------------------------------------------------------------------------
+# CXO Comparison Board
+# ---------------------------------------------------------------------------
+
+
+@api.get("/dashboard/cxo-comparison")
+async def cxo_comparison(user: User = Depends(get_current_user)):
+    """Side-by-side plant KPIs for the CXO board."""
+    plants = await db.plants.find({"tenant_id": user.tenant_id}, {"_id": 0}).to_list(50)
+    assets = await db.assets.find({"tenant_id": user.tenant_id}, {"_id": 0}).to_list(2000)
+    alarms = await db.alarms.find({"tenant_id": user.tenant_id, "acknowledged": False}, {"_id": 0}).to_list(500)
+
+    out = []
+    for p in plants:
+        p_assets = [a for a in assets if a["plant_id"] == p["id"]]
+        total = len(p_assets) or 1
+        running = sum(1 for a in p_assets if a["status"] in ("RUNNING", "WARNING"))
+        fault = sum(1 for a in p_assets if a["status"] in ("FAULT", "CRITICAL"))
+        avg_health = round(sum(a["health"] for a in p_assets) / total, 1)
+        # Deterministic mock KPIs seeded off plant code so demos are stable
+        seed = sum(ord(c) for c in p["code"])
+        rng = random.Random(seed)
+        oee = round(65 + rng.random() * 25, 1)
+        availability = round(80 + rng.random() * 18, 1)
+        performance = round(75 + rng.random() * 22, 1)
+        quality = round(90 + rng.random() * 9, 1)
+        energy_kwh = round(4200 + rng.random() * 3200, 0)
+        energy_cost = round(energy_kwh * 9.4, 0)  # INR/kWh
+        carbon = round(energy_kwh * 0.82, 0)
+        active_alarms = sum(1 for a in alarms if a["asset_id"] in {x["id"] for x in p_assets})
+        out.append({
+            "plant_id": p["id"],
+            "name": p["name"],
+            "location": p["location"],
+            "code": p["code"],
+            "total_assets": len(p_assets),
+            "running_pct": round(running * 100 / total, 1),
+            "fault_count": fault,
+            "avg_health": avg_health,
+            "oee": oee,
+            "availability": availability,
+            "performance": performance,
+            "quality": quality,
+            "energy_kwh": energy_kwh,
+            "energy_cost_inr": energy_cost,
+            "carbon_kg": carbon,
+            "active_alarms": active_alarms,
+        })
+    # sort by OEE desc for a natural leaderboard
+    out.sort(key=lambda x: x["oee"], reverse=True)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Operator Runbook
+# ---------------------------------------------------------------------------
+
+
+class ProductionEntry(BaseModel):
+    produced: int
+    good: int
+    reject: int = 0
+
+
+@api.get("/operator/my-machine")
+async def operator_my_machine(user: User = Depends(get_current_user)):
+    if user.role != "OPERATOR":
+        raise HTTPException(status_code=403, detail="Operators only")
+    asset_id = user.assigned_asset_id
+    if not asset_id:
+        # Fallback to CNC-DEMO-01 for the demo
+        demo = await db.assets.find_one({"tenant_id": user.tenant_id, "asset_code": "CNC-DEMO-01"}, {"_id": 0})
+        if not demo:
+            raise HTTPException(status_code=404, detail="No machine assigned")
+        asset_id = demo["id"]
+    a = await db.assets.find_one({"id": asset_id, "tenant_id": user.tenant_id}, {"_id": 0})
+    if not a:
+        raise HTTPException(status_code=404, detail="Assigned machine not found")
+    area = await db.areas.find_one({"id": a["area_id"]}, {"_id": 0})
+    plant = await db.plants.find_one({"id": a["plant_id"]}, {"_id": 0})
+    tele = await db.telemetry.find_one({"asset_id": a["id"]}, {"_id": 0}, sort=[("ts", -1)]) or {}
+    alarms = await db.alarms.find(
+        {"tenant_id": user.tenant_id, "asset_id": a["id"], "acknowledged": False},
+        {"_id": 0},
+    ).sort("created_at", -1).to_list(20)
+    a["area_name"] = area["name"] if area else "-"
+    a["plant_name"] = plant["name"] if plant else "-"
+    return {"asset": a, "telemetry": tele, "alarms": alarms}
+
+
+@api.post("/operator/production")
+async def operator_submit_production(entry: ProductionEntry, user: User = Depends(get_current_user)):
+    if user.role != "OPERATOR":
+        raise HTTPException(status_code=403, detail="Operators only")
+    if not user.assigned_asset_id:
+        raise HTTPException(status_code=404, detail="No assigned machine")
+    a = await db.assets.find_one({"id": user.assigned_asset_id, "tenant_id": user.tenant_id}, {"_id": 0})
+    if not a:
+        raise HTTPException(status_code=404, detail="Machine not found")
+    now = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "id": str(uuid.uuid4()),
+        "tenant_id": user.tenant_id,
+        "asset_id": a["id"],
+        "asset_code": a["asset_code"],
+        "operator_id": user.id,
+        "operator_name": user.name,
+        "produced": entry.produced,
+        "good": entry.good,
+        "reject": entry.reject or max(0, entry.produced - entry.good),
+        "ts": now,
+    }
+    await db.production_log.insert_one(doc.copy())
+    # roll forward telemetry counts
+    latest = await db.telemetry.find_one({"asset_id": a["id"]}, {"_id": 0}, sort=[("ts", -1)]) or {}
+    payload = TelemetryIn(
+        asset_id=a["id"],
+        production_count=int(latest.get("production_count", 0)) + entry.produced,
+        good_count=int(latest.get("good_count", 0)) + entry.good,
+        reject_count=int(latest.get("reject_count", 0)) + (entry.reject or max(0, entry.produced - entry.good)),
+    )
+    await ingest_telemetry_internal(payload)
+    doc.pop("_id", None)
+    return {"ok": True, "entry": doc}
+
+
+# ---------------------------------------------------------------------------
+# Escalations
+# ---------------------------------------------------------------------------
+
+
+@api.get("/escalations")
+async def list_escalations(user: User = Depends(get_current_user), limit: int = 50):
+    rows = await db.escalations.find({"tenant_id": user.tenant_id}, {"_id": 0}).sort("escalated_at", -1).to_list(limit)
+    return rows
 
 
 # ---------------------------------------------------------------------------
