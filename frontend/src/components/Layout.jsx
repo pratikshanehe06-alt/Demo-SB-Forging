@@ -3,9 +3,10 @@ import { useEffect, useState } from "react";
 import {
   LayoutDashboard, Boxes, Network, Users, ShieldCheck, ToggleRight,
   KeyRound, BellRing, FileBarChart2, ClipboardList, Settings, Search, Bell, LogOut, ChevronDown,
-  TrendingUp, ShieldAlert
+  TrendingUp, ShieldAlert, Factory
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
+import { usePlant } from "@/lib/plantContext";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator, DropdownMenuLabel
 } from "@/components/ui/dropdown-menu";
@@ -14,30 +15,44 @@ import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { useTelemetryStream } from "@/lib/ws";
 
-function navFor(role) {
-  const base = [];
-  if (role === "CXO") base.push({ to: "/cxo", label: "CXO Board", icon: TrendingUp });
-  if (["TENANT_ADMIN", "PRODUCTION_MANAGER", "SUPERVISOR"].includes(role)) base.push({ to: "/dashboard", label: "Dashboard", icon: LayoutDashboard });
-  if (role === "TENANT_ADMIN") base.push({ to: "/cxo", label: "CXO Board", icon: TrendingUp });
-  base.push(
-    { to: "/assets", label: "Assets", icon: Boxes },
-    { to: "/assets/hierarchy", label: "Asset Hierarchy", icon: Network },
-  );
-  base.push(
-    { to: "/users", label: "Users", icon: Users, disabled: true },
-    { to: "/roles", label: "Roles", icon: ShieldCheck, disabled: true },
-    { to: "/modules", label: "Module Access", icon: ToggleRight, disabled: true },
-    { to: "/fields", label: "Field Access", icon: KeyRound, disabled: true },
-    { to: "/alarms", label: "Alarms", icon: BellRing, disabled: true },
-    { to: "/reports", label: "Reports", icon: FileBarChart2, disabled: true },
-    { to: "/work-orders", label: "Work Orders", icon: ClipboardList, disabled: true },
-    { to: "/settings", label: "Settings", icon: Settings, disabled: true },
-  );
-  return base;
+function navFor(role, modules) {
+  const items = [];
+  if (role === "CXO") items.push({ to: "/cxo", label: "CXO Board", icon: TrendingUp });
+  if (["TENANT_ADMIN", "PRODUCTION_MANAGER", "SUPERVISOR"].includes(role)) {
+    items.push({ to: "/dashboard", label: "Dashboard", icon: LayoutDashboard });
+  }
+  if (role === "TENANT_ADMIN") items.push({ to: "/cxo", label: "CXO Board", icon: TrendingUp });
+
+  // APM-gated
+  if (modules?.APM !== false) {
+    items.push({ to: "/assets", label: "Assets", icon: Boxes });
+    items.push({ to: "/assets/hierarchy", label: "Asset Hierarchy", icon: Network });
+  }
+  // Users - Tenant Admin, Supervisor, Production Manager
+  if (["TENANT_ADMIN", "SUPERVISOR", "PRODUCTION_MANAGER"].includes(role)) {
+    items.push({ to: "/users", label: "Users", icon: Users });
+  }
+  // Module Access (Tenant Admin only)
+  if (role === "TENANT_ADMIN") {
+    items.push({ to: "/modules", label: "Module Access", icon: ToggleRight });
+  }
+  // Optional module-gated placeholders (disabled UI stubs)
+  if (modules?.OEE_APS) items.push({ to: "/oee", label: "OEE & APS", icon: Settings, disabled: true });
+  if (modules?.EEMS) items.push({ to: "/eems", label: "EEMS", icon: FileBarChart2, disabled: true });
+  if (modules?.AI_COPILOT) items.push({ to: "/copilot", label: "AI Copilot", icon: ShieldCheck, disabled: true });
+  if (modules?.REPORTS) items.push({ to: "/reports", label: "Reports", icon: FileBarChart2, disabled: true });
+  if (modules?.AUDIT) items.push({ to: "/audit", label: "Audit Logs", icon: KeyRound, disabled: true });
+
+  // Always shown (universal admin utilities)
+  items.push({ to: "/alarms", label: "Alarms", icon: BellRing, disabled: true });
+  items.push({ to: "/work-orders", label: "Work Orders", icon: ClipboardList, disabled: true });
+  items.push({ to: "/settings", label: "Settings", icon: Settings, disabled: true });
+  return items;
 }
 
 export default function Layout({ children }) {
-  const { user, tenant, logout, token } = useAuth();
+  const { user, tenant, logout, token, modules, refreshModules } = useAuth();
+  const { plants, selectedPlantId, selectPlant } = usePlant();
   const navigate = useNavigate();
   const [escalations, setEscalations] = useState([]);
   const { subscribe } = useTelemetryStream(token);
@@ -46,16 +61,19 @@ export default function Layout({ children }) {
     api.get("/escalations", { params: { limit: 20 } }).then((r) => setEscalations(r.data)).catch(() => {});
     return subscribe((msg) => {
       if (msg.type === "escalation") setEscalations((e) => [msg.event, ...e].slice(0, 20));
+      if (msg.type === "modules") refreshModules();
     });
-  }, [subscribe]);
+  }, [subscribe, refreshModules]);
 
-  const NAV = navFor(user?.role);
+  const NAV = navFor(user?.role, modules);
+  const showPlantSwitcher = ["TENANT_ADMIN", "CXO", "PRODUCTION_MANAGER"].includes(user?.role);
+  const selectedPlant = plants.find((p) => p.id === selectedPlantId);
 
   return (
     <div className="min-h-screen flex flex-col bg-[var(--workspace)]">
       {/* Top header */}
       <header className="h-16 bg-[color:var(--brand-navy)] text-white flex items-center px-6 shadow-sm">
-        <Link to="/" className="flex items-center gap-2 mr-8" data-testid="coreot-logo">
+        <Link to="/" className="flex items-center gap-2 mr-6" data-testid="coreot-logo">
           <div className="h-8 w-8 rounded-md bg-white/10 border border-white/20 grid place-items-center font-display font-black">C</div>
           <span className="font-display font-bold text-lg tracking-tight">CoreOT<sup className="text-[10px]">™</sup></span>
         </Link>
@@ -73,7 +91,34 @@ export default function Layout({ children }) {
           </DropdownMenuContent>
         </DropdownMenu>
 
-        <div className="flex-1 max-w-lg mx-6">
+        {showPlantSwitcher && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button data-testid="plant-switcher" className="ml-2 flex items-center gap-2 rounded-md bg-white/10 hover:bg-white/15 border border-white/20 px-3 h-9 text-sm">
+                <Factory className="h-4 w-4" />
+                <span className="font-medium">{selectedPlant ? selectedPlant.name : "All Plants"}</span>
+                <ChevronDown className="h-4 w-4" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-56 bg-white">
+              <DropdownMenuLabel>Plant filter</DropdownMenuLabel>
+              <DropdownMenuItem onClick={() => selectPlant("all")} data-testid="plant-option-all">
+                All Plants
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              {plants.map((p) => (
+                <DropdownMenuItem key={p.id} onClick={() => selectPlant(p.id)} data-testid={`plant-option-${p.code}`}>
+                  <div className="flex flex-col">
+                    <span>{p.name}</span>
+                    <span className="text-[10px] text-slate-500">{p.location}</span>
+                  </div>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+
+        <div className="flex-1 max-w-md mx-6">
           <div className="relative">
             <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <Input
@@ -154,7 +199,7 @@ export default function Layout({ children }) {
                 key={item.to + item.label}
                 to={item.to}
                 end
-                data-testid={`nav-${item.label.toLowerCase().replace(/\s+/g, "-")}`}
+                data-testid={`nav-${item.label.toLowerCase().replace(/[\s&]+/g, "-")}`}
                 className={({ isActive }) => cn("side-item", isActive && "active", item.disabled && "opacity-50 pointer-events-none")}
               >
                 <item.icon className="h-4 w-4" />

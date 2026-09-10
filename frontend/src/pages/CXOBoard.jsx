@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { usePlant } from "@/lib/plantContext";
 import {
   BarChart, Bar, ResponsiveContainer, XAxis, YAxis, Tooltip,
   RadarChart, PolarGrid, PolarAngleAxis, Radar, PolarRadiusAxis, Legend
@@ -10,6 +11,7 @@ const PLANT_COLORS = ["#1e3a8a", "#0891b2", "#f59e0b"];
 
 export default function CXOBoard() {
   const [plants, setPlants] = useState([]);
+  const { selectedPlantId } = usePlant();
 
   useEffect(() => {
     async function load() {
@@ -119,7 +121,7 @@ export default function CXOBoard() {
             </thead>
             <tbody>
               {plants.map((p, i) => (
-                <tr key={p.plant_id} className="data-row border-b last:border-0" data-testid={`cxo-row-${p.code}`}>
+                <tr key={p.plant_id} className={`data-row border-b last:border-0 ${selectedPlantId === p.plant_id ? "bg-blue-50/60 ring-1 ring-inset ring-[color:var(--brand-blue)]/40" : ""}`} data-testid={`cxo-row-${p.code}`}>
                   <td className="py-3 px-3">
                     <span className={`inline-flex items-center justify-center h-7 w-7 rounded-full font-mono font-bold text-xs ${i === 0 ? "bg-amber-100 text-amber-700" : i === 1 ? "bg-slate-100 text-slate-700" : "bg-orange-50 text-orange-700"}`}>
                       {i + 1}

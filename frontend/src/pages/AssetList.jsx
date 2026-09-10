@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
+import { usePlant } from "@/lib/plantContext";
 import { Plus, MoreHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -21,9 +22,10 @@ export default function AssetListPage() {
   const [filters, setFilters] = useState({ area_id: "all", asset_type: "all", status: "all" });
   const [page, setPage] = useState(1);
   const [openAdd, setOpenAdd] = useState(false);
+  const { params: plantParams, selectedPlantId } = usePlant();
 
   async function load() {
-    const params = {};
+    const params = { ...plantParams };
     if (filters.area_id !== "all") params.area_id = filters.area_id;
     if (filters.asset_type !== "all") params.asset_type = filters.asset_type;
     if (filters.status !== "all") params.status = filters.status;
@@ -32,7 +34,7 @@ export default function AssetListPage() {
     setPage(1);
   }
 
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [filters]);
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [filters, selectedPlantId]);
   useEffect(() => { api.get("/areas").then((r) => setAreas(r.data)); }, []);
 
   const assetTypes = useMemo(() => Array.from(new Set(assets.map((a) => a.asset_type))), [assets]);

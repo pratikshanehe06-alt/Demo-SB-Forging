@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { usePlant } from "@/lib/plantContext";
 import { StatusPill, SeverityBadge } from "@/components/Pills";
 import {
   BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, LineChart, Line,
@@ -20,19 +21,21 @@ const KPI_META = [
 
 export default function Dashboard() {
   const [data, setData] = useState(null);
+  const { params, selectedPlantId } = usePlant();
 
   useEffect(() => {
     let t;
     async function load() {
       try {
-        const { data } = await api.get("/dashboard/summary");
+        const { data } = await api.get("/dashboard/summary", { params });
         setData(data);
       } catch (_) { /* ignore */ }
       t = setTimeout(load, 15000);
     }
     load();
     return () => clearTimeout(t);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedPlantId]);
 
   if (!data) {
     return <div className="text-slate-500">Loading dashboard…</div>;

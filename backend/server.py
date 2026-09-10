@@ -54,6 +54,50 @@ JWT_EXPIRES_MIN = 60 * 24 * 7  # 7 days
 ESCALATION_MINUTES = int(os.environ.get("ESCALATION_MINUTES", "5"))
 
 
+MODULE_CATALOG: List[Dict[str, Any]] = [
+    {"key": "APM", "name": "Asset Performance Management",
+     "description": "Assets registry, health, live telemetry, digital-twin animation.",
+     "default": True, "gates": ["assets", "hierarchy", "asset360", "operator"]},
+    {"key": "EEMS", "name": "Enterprise Energy Management",
+     "description": "EMS, PQI, DERMS and Utility metering across every plant.",
+     "default": False, "gates": ["energy"]},
+    {"key": "DIGITAL_TWIN", "name": "Digital Twin",
+     "description": "Visual real-time twin of every machine on the floor.",
+     "default": True, "gates": ["twin"]},
+    {"key": "OEE_APS", "name": "OEE & APS",
+     "description": "Availability × Performance × Quality plus advanced planning.",
+     "default": False, "gates": ["oee", "aps"]},
+    {"key": "AI_COPILOT", "name": "AI Copilot",
+     "description": "Natural-language insights, downtime RCA and recommendations.",
+     "default": False, "gates": ["copilot"]},
+    {"key": "REPORTS", "name": "Reports & Forecasting",
+     "description": "Production, energy, OEE, downtime — CSV/Excel/PDF exports.",
+     "default": False, "gates": ["reports"]},
+    {"key": "AUDIT", "name": "Audit & Compliance",
+     "description": "Every config change, ack and login — searchable and exportable.",
+     "default": False, "gates": ["audit"]},
+]
+
+
+async def get_tenant_modules(tenant_id: str) -> Dict[str, bool]:
+    doc = await db.tenant_modules.find_one({"tenant_id": tenant_id}, {"_id": 0})
+    if not doc:
+        state = {m["key"]: m["default"] for m in MODULE_CATALOG}
+        await db.tenant_modules.insert_one({"tenant_id": tenant_id, "modules": state})
+        return state
+    return doc.get("modules", {})
+
+
+def require_module(module_key: str):
+    async def _dep(user: "User" = Depends(get_current_user)) -> "User":
+        modules = await get_tenant_modules(user.tenant_id)
+        if not modules.get(module_key, False):
+            raise HTTPException(status_code=403,
+                                detail=f"Module {module_key} is disabled for this tenant")
+        return user
+    return _dep
+
+
 def ensure_ingest_key() -> str:
     """Guarantee an INGEST_KEY exists; auto-generate + persist to backend/.env if missing."""
     existing = os.environ.get("INGEST_KEY", "").strip()
@@ -115,6 +159,7 @@ class LoginResponse(BaseModel):
     token_type: str = "bearer"
     user: User
     tenant: Tenant
+    modules: Dict[str, bool] = {}
 
 
 class Plant(BaseModel):
@@ -754,6 +799,7 @@ async def lifespan(app: FastAPI):
     await db.alarms.create_index([("tenant_id", 1), ("created_at", -1)])
     await db.assets.create_index([("tenant_id", 1)])
     await db.escalations.create_index([("tenant_id", 1), ("escalated_at", -1)])
+    await db.tenant_modules.create_index("tenant_id", unique=True)
     tasks = [
         asyncio.create_task(telemetry_simulator()),
         asyncio.create_task(escalation_scanner()),
@@ -788,7 +834,8 @@ async def login(req: LoginRequest):
     token = create_token(user_doc["id"], tenant["id"])
     user_doc.pop("password", None)
     user_doc.pop("_id", None)
-    return LoginResponse(access_token=token, user=User(**user_doc), tenant=Tenant(**tenant))
+    modules = await get_tenant_modules(tenant["id"])
+    return LoginResponse(access_token=token, user=User(**user_doc), tenant=Tenant(**tenant), modules=modules)
 
 
 @api.get("/auth/me", response_model=User)
@@ -808,8 +855,12 @@ async def list_tenants():
 
 
 @api.get("/dashboard/summary")
-async def dashboard_summary(user: User = Depends(get_current_user)):
-    assets = await db.assets.find({"tenant_id": user.tenant_id}, {"_id": 0}).to_list(1000)
+async def dashboard_summary(user: User = Depends(get_current_user),
+                            plant_id: Optional[str] = None):
+    query: Dict[str, Any] = {"tenant_id": user.tenant_id}
+    if plant_id and plant_id != "all":
+        query["plant_id"] = plant_id
+    assets = await db.assets.find(query, {"_id": 0}).to_list(2000)
     total = len(assets)
     by_status = {"RUNNING": 0, "IDLE": 0, "FAULT": 0, "STOPPED": 0, "WARNING": 0, "CRITICAL": 0, "OFFLINE": 0}
     for a in assets:
@@ -827,10 +878,12 @@ async def dashboard_summary(user: User = Depends(get_current_user)):
     by_area: Dict[str, int] = {}
     for a in assets:
         by_area[area_map.get(a["area_id"], "Other")] = by_area.get(area_map.get(a["area_id"], "Other"), 0) + 1
-    # Alarms
-    alarms = await db.alarms.find(
-        {"tenant_id": user.tenant_id}, {"_id": 0}
-    ).sort("created_at", -1).to_list(50)
+    # Alarms - filtered by plant if specified
+    alarm_query: Dict[str, Any] = {"tenant_id": user.tenant_id}
+    if plant_id and plant_id != "all":
+        asset_ids = [a["id"] for a in assets]
+        alarm_query["asset_id"] = {"$in": asset_ids}
+    alarms = await db.alarms.find(alarm_query, {"_id": 0}).sort("created_at", -1).to_list(50)
     active_alarms = len(alarms)
     critical_alarms = sum(1 for a in alarms if a["severity"] == "CRITICAL")
     # Alarms trend (last 7 days count per day)
@@ -879,13 +932,16 @@ async def dashboard_summary(user: User = Depends(get_current_user)):
 
 @api.get("/assets")
 async def list_assets(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_module("APM")),
+    plant_id: Optional[str] = None,
     area_id: Optional[str] = None,
     asset_type: Optional[str] = None,
     asset_status: Optional[str] = Query(None, alias="status"),
     q: Optional[str] = None,
 ):
     query: Dict[str, Any] = {"tenant_id": user.tenant_id}
+    if plant_id and plant_id != "all":
+        query["plant_id"] = plant_id
     if area_id and area_id != "all":
         query["area_id"] = area_id
     if asset_type and asset_type != "all":
@@ -1057,6 +1113,104 @@ async def ingest_key_hint(user: User = Depends(get_current_user)):
     if not key:
         return {"configured": False}
     return {"configured": True, "hint": f"{key[:6]}…{key[-4:]}", "length": len(key)}
+
+
+# ---------------------------------------------------------------------------
+# Modules (activation / deactivation)
+# ---------------------------------------------------------------------------
+
+
+@api.get("/modules")
+async def list_modules(user: User = Depends(get_current_user)):
+    state = await get_tenant_modules(user.tenant_id)
+    out = []
+    for m in MODULE_CATALOG:
+        out.append({
+            "key": m["key"],
+            "name": m["name"],
+            "description": m["description"],
+            "enabled": bool(state.get(m["key"], m["default"])),
+        })
+    return out
+
+
+class ModuleToggle(BaseModel):
+    enabled: bool
+
+
+@api.put("/modules/{module_key}")
+async def toggle_module(module_key: str, payload: ModuleToggle,
+                        user: User = Depends(get_current_user)):
+    if user.role != "TENANT_ADMIN":
+        raise HTTPException(status_code=403, detail="Only Tenant Admin can toggle modules")
+    if module_key not in {m["key"] for m in MODULE_CATALOG}:
+        raise HTTPException(status_code=404, detail="Unknown module")
+    state = await get_tenant_modules(user.tenant_id)
+    state[module_key] = payload.enabled
+    await db.tenant_modules.update_one(
+        {"tenant_id": user.tenant_id},
+        {"$set": {"modules": state}},
+        upsert=True,
+    )
+    await ws_manager.broadcast(user.tenant_id,
+                               {"type": "modules", "modules": state})
+    return {"key": module_key, "enabled": payload.enabled, "modules": state}
+
+
+# ---------------------------------------------------------------------------
+# Users management (list + machine assignment)
+# ---------------------------------------------------------------------------
+
+
+class UserAssignment(BaseModel):
+    assigned_asset_id: Optional[str] = None
+
+
+@api.get("/users")
+async def list_users(user: User = Depends(get_current_user)):
+    if user.role not in ("TENANT_ADMIN", "SUPERVISOR", "PRODUCTION_MANAGER"):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    docs = await db.users.find(
+        {"tenant_id": user.tenant_id},
+        {"_id": 0, "password": 0},
+    ).to_list(500)
+    # Enrich with assigned asset code
+    asset_ids = {u.get("assigned_asset_id") for u in docs if u.get("assigned_asset_id")}
+    asset_map: Dict[str, Dict[str, Any]] = {}
+    if asset_ids:
+        for a in await db.assets.find(
+            {"id": {"$in": list(asset_ids)}, "tenant_id": user.tenant_id},
+            {"_id": 0, "id": 1, "asset_code": 1, "name": 1},
+        ).to_list(500):
+            asset_map[a["id"]] = a
+    for u in docs:
+        aid = u.get("assigned_asset_id")
+        u["assigned_asset"] = asset_map.get(aid) if aid else None
+    return docs
+
+
+@api.put("/users/{user_id}/assign")
+async def assign_user_machine(user_id: str, payload: UserAssignment,
+                              user: User = Depends(get_current_user)):
+    if user.role not in ("TENANT_ADMIN", "SUPERVISOR"):
+        raise HTTPException(status_code=403, detail="Only Supervisor or Tenant Admin can assign machines")
+    target = await db.users.find_one({"id": user_id, "tenant_id": user.tenant_id})
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    if target.get("role") != "OPERATOR":
+        raise HTTPException(status_code=400, detail="Machine assignment is only meaningful for Operators")
+    if payload.assigned_asset_id:
+        asset = await db.assets.find_one(
+            {"id": payload.assigned_asset_id, "tenant_id": user.tenant_id},
+            {"_id": 0, "id": 1, "asset_code": 1},
+        )
+        if not asset:
+            raise HTTPException(status_code=404, detail="Asset not found in tenant")
+    await db.users.update_one(
+        {"id": user_id, "tenant_id": user.tenant_id},
+        {"$set": {"assigned_asset_id": payload.assigned_asset_id}},
+    )
+    return {"ok": True, "user_id": user_id, "assigned_asset_id": payload.assigned_asset_id}
 
 
 # ---------------------------------------------------------------------------
