@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import {
   LayoutDashboard, Boxes, Network, Users, ShieldCheck, ToggleRight,
   KeyRound, BellRing, FileBarChart2, ClipboardList, Settings, Search, Bell, LogOut, ChevronDown,
-  TrendingUp, ShieldAlert, Factory
+  TrendingUp, ShieldAlert, Factory, FileSpreadsheet
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { usePlant } from "@/lib/plantContext";
@@ -43,7 +43,7 @@ function navFor(role, modules) {
   if (modules?.OEE_APS) items.push({ to: "/oee", label: "OEE & APS", icon: Settings });
   if (modules?.EEMS) items.push({ to: "/eems", label: "EEMS", icon: FileBarChart2 });
   if (modules?.AI_COPILOT) items.push({ to: "/copilot", label: "AI Copilot", icon: ShieldCheck, disabled: true });
-  if (modules?.REPORTS) items.push({ to: "/reports", label: "Reports", icon: FileBarChart2, disabled: true });
+  if (modules?.REPORTS) items.push({ to: "/reports", label: "Reports", icon: FileSpreadsheet });
   if (modules?.AUDIT && role === "TENANT_ADMIN") items.push({ to: "/audit", label: "Audit Logs", icon: KeyRound });
 
   items.push({ to: "/alarms", label: "Alarms", icon: BellRing, disabled: true });

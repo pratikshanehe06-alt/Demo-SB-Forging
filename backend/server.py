@@ -72,7 +72,7 @@ MODULE_CATALOG: List[Dict[str, Any]] = [
      "default": False, "gates": ["copilot"]},
     {"key": "REPORTS", "name": "Reports & Forecasting",
      "description": "Production, energy, OEE, downtime — CSV/Excel/PDF exports.",
-     "default": False, "gates": ["reports"]},
+     "default": True, "gates": ["reports"]},
     {"key": "AUDIT", "name": "Audit & Compliance",
      "description": "Every config change, ack and login — searchable and exportable.",
      "default": True, "gates": ["audit"]},
@@ -946,6 +946,19 @@ async def lifespan(app: FastAPI):
     await db.assets.create_index([("tenant_id", 1)])
     await db.escalations.create_index([("tenant_id", 1), ("escalated_at", -1)])
     await db.tenant_modules.create_index("tenant_id", unique=True)
+    # Backfill: ensure REPORTS module is enabled for existing tenants (idempotent)
+    async for tm in db.tenant_modules.find({}):
+        mods = tm.get("modules", {}) or {}
+        changed = False
+        for m in MODULE_CATALOG:
+            if m["key"] not in mods:
+                mods[m["key"]] = m["default"]
+                changed = True
+        if not mods.get("REPORTS", False):
+            mods["REPORTS"] = True
+            changed = True
+        if changed:
+            await db.tenant_modules.update_one({"_id": tm["_id"]}, {"$set": {"modules": mods}})
     tasks = [
         asyncio.create_task(telemetry_simulator()),
         asyncio.create_task(escalation_scanner()),
@@ -2090,6 +2103,637 @@ async def ws_telemetry(websocket: WebSocket, token: Optional[str] = Query(None))
             await websocket.receive_text()  # ignore inbound
     except WebSocketDisconnect:
         ws_manager.disconnect(websocket, tenant_id)
+
+
+# ---------------------------------------------------------------------------
+# Reports & Forecasting
+# ---------------------------------------------------------------------------
+
+from io import BytesIO, StringIO
+import csv as _csv
+import json as _json
+import math as _math
+
+REPORT_CATALOG = [
+    {"key": "PRODUCTION", "name": "Production Report",
+     "description": "Produced / good / reject units over time with per-asset breakdown.",
+     "metrics": ["produced", "good", "reject", "yield_pct"], "default_metric": "produced"},
+    {"key": "OEE", "name": "OEE Report",
+     "description": "Availability × Performance × Quality trend and losses.",
+     "metrics": ["oee", "availability", "performance", "quality"], "default_metric": "oee"},
+    {"key": "ENERGY", "name": "Energy Consumption Report",
+     "description": "kWh, cost, power factor, THD and carbon by plant.",
+     "metrics": ["kwh", "cost_inr", "carbon_kg", "power_factor"], "default_metric": "kwh"},
+    {"key": "DOWNTIME", "name": "Downtime & Alarms Report",
+     "description": "Downtime minutes by reason with Pareto and trend.",
+     "metrics": ["downtime_min", "events"], "default_metric": "downtime_min"},
+    {"key": "MAINTENANCE", "name": "Maintenance Report",
+     "description": "MTBF, MTTR and maintenance spend by asset.",
+     "metrics": ["cost_inr", "count", "mtbf_hours", "mttr_hours"], "default_metric": "cost_inr"},
+]
+
+
+class ReportRunRequest(BaseModel):
+    report_type: str
+    start_date: Optional[str] = None  # YYYY-MM-DD
+    end_date: Optional[str] = None    # YYYY-MM-DD
+    plant_id: Optional[str] = None
+    asset_id: Optional[str] = None
+    aggregation: str = "daily"        # daily | weekly | monthly
+    metric: Optional[str] = None
+    include_forecast: bool = False
+    forecast_periods: int = 7
+    format: Optional[str] = None      # None | csv | pdf | json
+
+
+def _parse_range(req: ReportRunRequest) -> tuple[datetime, datetime]:
+    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    try:
+        end = datetime.fromisoformat(req.end_date).replace(tzinfo=timezone.utc) if req.end_date else today
+        start = datetime.fromisoformat(req.start_date).replace(tzinfo=timezone.utc) if req.start_date \
+            else end - timedelta(days=29)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid date: {e}") from e
+    if start > end:
+        start, end = end, start
+    return start, end
+
+
+def _bucket_key(dt: datetime, agg: str) -> str:
+    if agg == "monthly":
+        return dt.strftime("%Y-%m")
+    if agg == "weekly":
+        # ISO week start Monday
+        monday = dt - timedelta(days=dt.weekday())
+        return monday.date().isoformat()
+    return dt.date().isoformat()
+
+
+def _bucket_seq(start: datetime, end: datetime, agg: str) -> List[str]:
+    out: List[str] = []
+    cur = start
+    seen = set()
+    if agg == "monthly":
+        d = start.replace(day=1)
+        while d <= end:
+            k = d.strftime("%Y-%m")
+            if k not in seen: out.append(k); seen.add(k)
+            # advance month
+            year, month = d.year, d.month
+            d = d.replace(year=year + 1, month=1, day=1) if month == 12 else d.replace(month=month + 1, day=1)
+        return out
+    step = timedelta(days=7 if agg == "weekly" else 1)
+    while cur <= end:
+        k = _bucket_key(cur, agg)
+        if k not in seen: out.append(k); seen.add(k)
+        cur += step
+    return out
+
+
+def _linear_forecast(y: List[float], periods: int) -> Dict[str, Any]:
+    """Simple OLS linear regression forecast with 95% CI."""
+    n = len(y)
+    if n < 3 or periods <= 0:
+        return {"points": [], "slope": 0.0, "intercept": (y[-1] if y else 0.0), "ci_half": 0.0}
+    xs = list(range(n))
+    mean_x = sum(xs) / n
+    mean_y = sum(y) / n
+    num = sum((xs[i] - mean_x) * (y[i] - mean_y) for i in range(n))
+    den = sum((xs[i] - mean_x) ** 2 for i in range(n)) or 1e-9
+    slope = num / den
+    intercept = mean_y - slope * mean_x
+    residuals = [y[i] - (slope * xs[i] + intercept) for i in range(n)]
+    sse = sum(r * r for r in residuals)
+    dof = max(1, n - 2)
+    sigma = _math.sqrt(sse / dof)
+    ci = 1.96 * sigma
+    pts = []
+    for k in range(1, periods + 1):
+        x = n - 1 + k
+        yhat = slope * x + intercept
+        value = max(0.0, yhat)
+        pts.append({"step": k, "value": round(value, 3),
+                    "lower": round(max(0.0, yhat - ci), 3),
+                    "upper": round(max(value, yhat + ci), 3)})
+    return {"points": pts, "slope": round(slope, 4), "intercept": round(intercept, 4),
+            "ci_half": round(ci, 3)}
+
+
+async def _plant_lookup(tenant_id: str) -> Dict[str, str]:
+    plants = await db.plants.find({"tenant_id": tenant_id}, {"_id": 0}).to_list(200)
+    return {p["id"]: p["name"] for p in plants}
+
+
+async def _asset_lookup(tenant_id: str) -> Dict[str, Dict[str, Any]]:
+    assets = await db.assets.find({"tenant_id": tenant_id}, {"_id": 0}).to_list(2000)
+    return {a["id"]: a for a in assets}
+
+
+async def _run_production(tenant_id: str, req: ReportRunRequest, start: datetime, end: datetime):
+    q: Dict[str, Any] = {"tenant_id": tenant_id, "ts": {"$gte": start.isoformat(), "$lte": (end + timedelta(days=1)).isoformat()}}
+    if req.asset_id: q["asset_id"] = req.asset_id
+    rows = await db.production_log.find(q, {"_id": 0}).sort("ts", 1).to_list(20000)
+    assets_map = await _asset_lookup(tenant_id)
+    plants_map = await _plant_lookup(tenant_id)
+    if req.plant_id:
+        rows = [r for r in rows if (assets_map.get(r["asset_id"], {}).get("plant_id") == req.plant_id)]
+    buckets = _bucket_seq(start, end, req.aggregation)
+    b_map: Dict[str, Dict[str, Any]] = {k: {"period": k, "produced": 0, "good": 0, "reject": 0} for k in buckets}
+    for r in rows:
+        dt = datetime.fromisoformat(r["ts"].replace("Z", "+00:00"))
+        k = _bucket_key(dt, req.aggregation)
+        if k not in b_map: continue
+        b_map[k]["produced"] += int(r.get("produced", 0))
+        b_map[k]["good"] += int(r.get("good", 0))
+        b_map[k]["reject"] += int(r.get("reject", 0))
+    series = [dict(v, yield_pct=round(v["good"] * 100 / v["produced"], 1) if v["produced"] else 0)
+              for v in b_map.values()]
+    # detail rows (per asset)
+    per_asset: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        a = assets_map.get(r["asset_id"], {})
+        pa = per_asset.setdefault(r["asset_id"], {"asset_code": r.get("asset_code"),
+                                                   "asset_name": a.get("name", r.get("asset_code")),
+                                                   "plant": plants_map.get(a.get("plant_id"), "-"),
+                                                   "produced": 0, "good": 0, "reject": 0})
+        pa["produced"] += int(r.get("produced", 0)); pa["good"] += int(r.get("good", 0))
+        pa["reject"] += int(r.get("reject", 0))
+    detail = sorted(per_asset.values(), key=lambda x: -x["produced"])
+    for d in detail:
+        d["yield_pct"] = round(d["good"] * 100 / d["produced"], 1) if d["produced"] else 0
+    totals = {"produced": sum(v["produced"] for v in series),
+              "good": sum(v["good"] for v in series),
+              "reject": sum(v["reject"] for v in series)}
+    totals["yield_pct"] = round(totals["good"] * 100 / totals["produced"], 1) if totals["produced"] else 0
+    columns = [{"key": "period", "label": "Period"},
+               {"key": "produced", "label": "Produced"},
+               {"key": "good", "label": "Good"},
+               {"key": "reject", "label": "Reject"},
+               {"key": "yield_pct", "label": "Yield %"}]
+    detail_columns = [{"key": "asset_code", "label": "Asset"},
+                      {"key": "asset_name", "label": "Name"},
+                      {"key": "plant", "label": "Plant"},
+                      {"key": "produced", "label": "Produced"},
+                      {"key": "good", "label": "Good"},
+                      {"key": "reject", "label": "Reject"},
+                      {"key": "yield_pct", "label": "Yield %"}]
+    kpis = [{"label": "Total produced", "value": totals["produced"]},
+            {"label": "Total good", "value": totals["good"]},
+            {"label": "Total reject", "value": totals["reject"]},
+            {"label": "Yield %", "value": totals["yield_pct"]}]
+    return {"kpis": kpis, "columns": columns, "rows": series,
+            "detail_columns": detail_columns, "detail_rows": detail}
+
+
+async def _run_energy(tenant_id: str, req: ReportRunRequest, start: datetime, end: datetime):
+    q: Dict[str, Any] = {"tenant_id": tenant_id,
+                          "date": {"$gte": start.date().isoformat(), "$lte": end.date().isoformat()}}
+    if req.plant_id: q["plant_id"] = req.plant_id
+    rows = await db.energy_records.find(q, {"_id": 0}).sort("date", 1).to_list(20000)
+    buckets = _bucket_seq(start, end, req.aggregation)
+    b_map: Dict[str, Dict[str, Any]] = {k: {"period": k, "kwh": 0.0, "cost_inr": 0.0,
+                                             "carbon_kg": 0.0, "_pf_sum": 0.0, "_n": 0} for k in buckets}
+    for r in rows:
+        dt = datetime.fromisoformat(r["date"])
+        k = _bucket_key(dt.replace(tzinfo=timezone.utc), req.aggregation)
+        if k not in b_map: continue
+        b_map[k]["kwh"] += r["kwh"]; b_map[k]["cost_inr"] += r["cost_inr"]
+        b_map[k]["carbon_kg"] += r["carbon_kg"]
+        b_map[k]["_pf_sum"] += r["power_factor"]; b_map[k]["_n"] += 1
+    series = []
+    for v in b_map.values():
+        series.append({"period": v["period"], "kwh": round(v["kwh"], 1),
+                       "cost_inr": round(v["cost_inr"], 0),
+                       "carbon_kg": round(v["carbon_kg"], 1),
+                       "power_factor": round(v["_pf_sum"] / v["_n"], 3) if v["_n"] else 0})
+    # per plant
+    plants_map = await _plant_lookup(tenant_id)
+    per_plant: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        pp = per_plant.setdefault(r["plant_id"], {"plant": plants_map.get(r["plant_id"], r.get("plant_name", "-")),
+                                                    "kwh": 0.0, "cost_inr": 0.0, "carbon_kg": 0.0,
+                                                    "_pf_sum": 0.0, "_n": 0})
+        pp["kwh"] += r["kwh"]; pp["cost_inr"] += r["cost_inr"]; pp["carbon_kg"] += r["carbon_kg"]
+        pp["_pf_sum"] += r["power_factor"]; pp["_n"] += 1
+    detail = []
+    for v in per_plant.values():
+        detail.append({"plant": v["plant"], "kwh": round(v["kwh"], 1),
+                       "cost_inr": round(v["cost_inr"], 0),
+                       "carbon_kg": round(v["carbon_kg"], 1),
+                       "power_factor": round(v["_pf_sum"] / v["_n"], 3) if v["_n"] else 0})
+    detail.sort(key=lambda x: -x["kwh"])
+    total_kwh = sum(v["kwh"] for v in series)
+    total_cost = sum(v["cost_inr"] for v in series)
+    total_carbon = sum(v["carbon_kg"] for v in series)
+    kpis = [{"label": "Total kWh", "value": round(total_kwh, 1)},
+            {"label": "Total cost (INR)", "value": round(total_cost, 0)},
+            {"label": "Total carbon (kg)", "value": round(total_carbon, 1)},
+            {"label": "Avg PF", "value": round(sum(s["power_factor"] for s in series) / len(series), 3) if series else 0}]
+    columns = [{"key": "period", "label": "Period"},
+               {"key": "kwh", "label": "kWh"},
+               {"key": "cost_inr", "label": "Cost (INR)"},
+               {"key": "carbon_kg", "label": "Carbon (kg)"},
+               {"key": "power_factor", "label": "Power factor"}]
+    detail_columns = [{"key": "plant", "label": "Plant"},
+                      {"key": "kwh", "label": "kWh"},
+                      {"key": "cost_inr", "label": "Cost (INR)"},
+                      {"key": "carbon_kg", "label": "Carbon (kg)"},
+                      {"key": "power_factor", "label": "Power factor"}]
+    return {"kpis": kpis, "columns": columns, "rows": series,
+            "detail_columns": detail_columns, "detail_rows": detail}
+
+
+async def _run_downtime(tenant_id: str, req: ReportRunRequest, start: datetime, end: datetime):
+    q: Dict[str, Any] = {"tenant_id": tenant_id,
+                          "started_at": {"$gte": start.isoformat(),
+                                          "$lte": (end + timedelta(days=1)).isoformat()}}
+    if req.plant_id: q["plant_id"] = req.plant_id
+    if req.asset_id: q["asset_id"] = req.asset_id
+    rows = await db.downtime_events.find(q, {"_id": 0}).sort("started_at", 1).to_list(20000)
+    buckets = _bucket_seq(start, end, req.aggregation)
+    b_map: Dict[str, Dict[str, Any]] = {k: {"period": k, "downtime_min": 0, "events": 0} for k in buckets}
+    for r in rows:
+        dt = datetime.fromisoformat(r["started_at"].replace("Z", "+00:00"))
+        k = _bucket_key(dt, req.aggregation)
+        if k not in b_map: continue
+        b_map[k]["downtime_min"] += int(r.get("duration_min", 0))
+        b_map[k]["events"] += 1
+    series = list(b_map.values())
+    # Pareto by reason
+    by_reason: Dict[str, Dict[str, int]] = {}
+    for r in rows:
+        bp = by_reason.setdefault(r.get("reason", "Unknown"), {"reason": r.get("reason", "Unknown"),
+                                                                 "downtime_min": 0, "events": 0})
+        bp["downtime_min"] += int(r.get("duration_min", 0))
+        bp["events"] += 1
+    detail = sorted(by_reason.values(), key=lambda x: -x["downtime_min"])
+    total = sum(d["downtime_min"] for d in detail) or 1
+    for d in detail:
+        d["pct"] = round(d["downtime_min"] * 100 / total, 1)
+    kpis = [{"label": "Total downtime (min)", "value": sum(v["downtime_min"] for v in series)},
+            {"label": "Events", "value": sum(v["events"] for v in series)},
+            {"label": "Avg / event (min)", "value": round(sum(v["downtime_min"] for v in series) /
+                                                            max(1, sum(v["events"] for v in series)), 1)},
+            {"label": "Top reason", "value": detail[0]["reason"] if detail else "-"}]
+    columns = [{"key": "period", "label": "Period"},
+               {"key": "downtime_min", "label": "Downtime (min)"},
+               {"key": "events", "label": "Events"}]
+    detail_columns = [{"key": "reason", "label": "Reason"},
+                      {"key": "downtime_min", "label": "Downtime (min)"},
+                      {"key": "events", "label": "Events"},
+                      {"key": "pct", "label": "% of total"}]
+    return {"kpis": kpis, "columns": columns, "rows": series,
+            "detail_columns": detail_columns, "detail_rows": detail}
+
+
+async def _run_maintenance(tenant_id: str, req: ReportRunRequest, start: datetime, end: datetime):
+    q: Dict[str, Any] = {"tenant_id": tenant_id,
+                          "performed_at": {"$gte": start.isoformat(),
+                                            "$lte": (end + timedelta(days=1)).isoformat()}}
+    if req.asset_id: q["asset_id"] = req.asset_id
+    rows = await db.maintenance_records.find(q, {"_id": 0}).sort("performed_at", 1).to_list(20000)
+    assets_map = await _asset_lookup(tenant_id)
+    plants_map = await _plant_lookup(tenant_id)
+    if req.plant_id:
+        rows = [r for r in rows if assets_map.get(r["asset_id"], {}).get("plant_id") == req.plant_id]
+    buckets = _bucket_seq(start, end, req.aggregation)
+    b_map: Dict[str, Dict[str, Any]] = {k: {"period": k, "cost_inr": 0.0, "count": 0} for k in buckets}
+    for r in rows:
+        dt = datetime.fromisoformat(r["performed_at"].replace("Z", "+00:00"))
+        k = _bucket_key(dt, req.aggregation)
+        if k not in b_map: continue
+        b_map[k]["cost_inr"] += float(r.get("cost_inr", 0))
+        b_map[k]["count"] += 1
+    series = [{"period": v["period"], "cost_inr": round(v["cost_inr"], 0), "count": v["count"]}
+              for v in b_map.values()]
+    # per asset MTBF/MTTR + spend
+    dt_events_all = await db.downtime_events.find({"tenant_id": tenant_id}, {"_id": 0}).to_list(20000)
+    per_asset: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        a = assets_map.get(r["asset_id"], {})
+        pa = per_asset.setdefault(r["asset_id"], {"asset_code": r.get("asset_code"),
+                                                    "asset_name": a.get("name", r.get("asset_code")),
+                                                    "plant": plants_map.get(a.get("plant_id"), "-"),
+                                                    "count": 0, "cost_inr": 0.0})
+        pa["count"] += 1; pa["cost_inr"] += float(r.get("cost_inr", 0))
+    for aid, pa in per_asset.items():
+        dts = [d for d in dt_events_all if d.get("asset_id") == aid]
+        pa["mtbf_hours"] = round((30 * 24) / max(1, len(dts)), 1)  # over ~30d window
+        pa["mttr_hours"] = round(sum(d.get("duration_min", 0) for d in dts) / max(1, len(dts)) / 60, 2)
+        pa["cost_inr"] = round(pa["cost_inr"], 0)
+    detail = sorted(per_asset.values(), key=lambda x: -x["cost_inr"])
+    kpis = [{"label": "Total spend (INR)", "value": round(sum(v["cost_inr"] for v in series), 0)},
+            {"label": "Work orders", "value": sum(v["count"] for v in series)},
+            {"label": "Assets serviced", "value": len(per_asset)},
+            {"label": "Avg MTBF (h)", "value": round(sum(d["mtbf_hours"] for d in detail) / len(detail), 1) if detail else 0}]
+    columns = [{"key": "period", "label": "Period"},
+               {"key": "cost_inr", "label": "Spend (INR)"},
+               {"key": "count", "label": "Work orders"}]
+    detail_columns = [{"key": "asset_code", "label": "Asset"},
+                      {"key": "asset_name", "label": "Name"},
+                      {"key": "plant", "label": "Plant"},
+                      {"key": "count", "label": "WOs"},
+                      {"key": "cost_inr", "label": "Spend (INR)"},
+                      {"key": "mtbf_hours", "label": "MTBF (h)"},
+                      {"key": "mttr_hours", "label": "MTTR (h)"}]
+    return {"kpis": kpis, "columns": columns, "rows": series,
+            "detail_columns": detail_columns, "detail_rows": detail}
+
+
+async def _run_oee(tenant_id: str, req: ReportRunRequest, start: datetime, end: datetime):
+    prod_q: Dict[str, Any] = {"tenant_id": tenant_id,
+                                "ts": {"$gte": start.isoformat(),
+                                        "$lte": (end + timedelta(days=1)).isoformat()}}
+    dt_q: Dict[str, Any] = {"tenant_id": tenant_id,
+                              "started_at": {"$gte": start.isoformat(),
+                                              "$lte": (end + timedelta(days=1)).isoformat()}}
+    if req.plant_id: dt_q["plant_id"] = req.plant_id
+    productions = await db.production_log.find(prod_q, {"_id": 0}).to_list(20000)
+    downtimes = await db.downtime_events.find(dt_q, {"_id": 0}).to_list(20000)
+    assets_map = await _asset_lookup(tenant_id)
+    if req.plant_id:
+        productions = [p for p in productions if assets_map.get(p["asset_id"], {}).get("plant_id") == req.plant_id]
+    buckets = _bucket_seq(start, end, req.aggregation)
+
+    def score(produced, good, downtime_min, planned_min, ideal_per_hr=60):
+        planned = max(1, planned_min)
+        availability = max(0.0, (planned - downtime_min) / planned)
+        run_time = max(1, planned - downtime_min)
+        ideal = ideal_per_hr * (run_time / 60)
+        performance = min(1.0, produced / ideal) if ideal else 0
+        quality = (good / produced) if produced else 1.0
+        return {"availability": round(availability * 100, 1),
+                "performance": round(performance * 100, 1),
+                "quality": round(quality * 100, 1),
+                "oee": round(availability * performance * quality * 100, 1)}
+
+    minutes_per_bucket = {"daily": 3 * 480, "weekly": 7 * 3 * 480, "monthly": 30 * 3 * 480}
+    planned = minutes_per_bucket.get(req.aggregation, 1440)
+    b_map: Dict[str, Dict[str, Any]] = {k: {"period": k, "produced": 0, "good": 0, "downtime_min": 0} for k in buckets}
+    for p in productions:
+        dt = datetime.fromisoformat(p["ts"].replace("Z", "+00:00"))
+        k = _bucket_key(dt, req.aggregation)
+        if k not in b_map: continue
+        b_map[k]["produced"] += int(p.get("produced", 0))
+        b_map[k]["good"] += int(p.get("good", 0))
+    for d in downtimes:
+        dt = datetime.fromisoformat(d["started_at"].replace("Z", "+00:00"))
+        k = _bucket_key(dt, req.aggregation)
+        if k not in b_map: continue
+        b_map[k]["downtime_min"] += int(d.get("duration_min", 0))
+    series = []
+    for v in b_map.values():
+        s = score(v["produced"], v["good"], v["downtime_min"], planned)
+        series.append({"period": v["period"], **s,
+                       "produced": v["produced"], "good": v["good"],
+                       "downtime_min": v["downtime_min"]})
+    # overall
+    total_prod = sum(v["produced"] for v in series)
+    total_good = sum(v["good"] for v in series)
+    total_dt = sum(v["downtime_min"] for v in series)
+    overall = score(total_prod, total_good, total_dt, planned * max(1, len(series)))
+    # per-reason detail
+    reasons: Dict[str, int] = {}
+    for d in downtimes:
+        reasons[d.get("reason", "Unknown")] = reasons.get(d.get("reason", "Unknown"), 0) + int(d.get("duration_min", 0))
+    detail = [{"reason": k, "downtime_min": v,
+                "pct": round(v * 100 / max(1, total_dt), 1)} for k, v in
+                sorted(reasons.items(), key=lambda x: -x[1])]
+    kpis = [{"label": "OEE %", "value": overall["oee"]},
+            {"label": "Availability %", "value": overall["availability"]},
+            {"label": "Performance %", "value": overall["performance"]},
+            {"label": "Quality %", "value": overall["quality"]}]
+    columns = [{"key": "period", "label": "Period"},
+               {"key": "oee", "label": "OEE %"},
+               {"key": "availability", "label": "Availability %"},
+               {"key": "performance", "label": "Performance %"},
+               {"key": "quality", "label": "Quality %"},
+               {"key": "downtime_min", "label": "Downtime (min)"}]
+    detail_columns = [{"key": "reason", "label": "Downtime reason"},
+                      {"key": "downtime_min", "label": "Minutes"},
+                      {"key": "pct", "label": "% of total"}]
+    return {"kpis": kpis, "columns": columns, "rows": series,
+            "detail_columns": detail_columns, "detail_rows": detail}
+
+
+_REPORT_RUNNERS = {
+    "PRODUCTION": _run_production,
+    "ENERGY": _run_energy,
+    "OEE": _run_oee,
+    "DOWNTIME": _run_downtime,
+    "MAINTENANCE": _run_maintenance,
+}
+
+
+def _report_meta(key: str) -> Dict[str, Any]:
+    for r in REPORT_CATALOG:
+        if r["key"] == key: return r
+    raise HTTPException(status_code=400, detail=f"Unknown report type: {key}")
+
+
+async def _compute_report(user: "User", req: ReportRunRequest) -> Dict[str, Any]:
+    meta = _report_meta(req.report_type)
+    if req.aggregation not in ("daily", "weekly", "monthly"):
+        raise HTTPException(status_code=400, detail="aggregation must be daily|weekly|monthly")
+    metric = req.metric or meta["default_metric"]
+    if metric not in meta["metrics"]:
+        raise HTTPException(status_code=400, detail=f"metric '{metric}' not valid for {req.report_type}")
+    start, end = _parse_range(req)
+    runner = _REPORT_RUNNERS[req.report_type]
+    data = await runner(user.tenant_id, req, start, end)
+    forecast = None
+    if req.include_forecast and len(data["rows"]) >= 3:
+        y = [float(row.get(metric, 0) or 0) for row in data["rows"]]
+        forecast = _linear_forecast(y, req.forecast_periods)
+        forecast["metric"] = metric
+    return {
+        "report_type": req.report_type,
+        "report_name": meta["name"],
+        "range": {"start": start.date().isoformat(),
+                    "end": end.date().isoformat(),
+                    "aggregation": req.aggregation},
+        "metric": metric,
+        "kpis": data["kpis"],
+        "columns": data["columns"],
+        "rows": data["rows"],
+        "detail_columns": data.get("detail_columns", []),
+        "detail_rows": data.get("detail_rows", []),
+        "forecast": forecast,
+        "filters": {"plant_id": req.plant_id, "asset_id": req.asset_id},
+    }
+
+
+@api.get("/reports/catalog")
+async def reports_catalog(user: User = Depends(require_module("REPORTS"))):
+    return {"reports": REPORT_CATALOG,
+            "aggregations": ["daily", "weekly", "monthly"],
+            "export_formats": ["csv", "pdf", "json"]}
+
+
+@api.post("/reports/run")
+async def reports_run(req: ReportRunRequest, user: User = Depends(require_module("REPORTS"))):
+    result = await _compute_report(user, req)
+    await record_audit(user, "report.run", "report", req.report_type,
+                        {"range": result["range"], "metric": result["metric"]})
+    return result
+
+
+def _csv_response(report: Dict[str, Any]):
+    from fastapi.responses import StreamingResponse
+    buf = StringIO()
+    w = _csv.writer(buf)
+    w.writerow([f"CoreOT — {report['report_name']}"])
+    w.writerow([f"Range: {report['range']['start']} → {report['range']['end']} ({report['range']['aggregation']})"])
+    w.writerow([])
+    w.writerow(["KPI", "Value"])
+    for k in report["kpis"]:
+        w.writerow([k["label"], k["value"]])
+    w.writerow([])
+    w.writerow([c["label"] for c in report["columns"]])
+    for row in report["rows"]:
+        w.writerow([row.get(c["key"], "") for c in report["columns"]])
+    if report.get("detail_rows"):
+        w.writerow([])
+        w.writerow([c["label"] for c in report["detail_columns"]])
+        for row in report["detail_rows"]:
+            w.writerow([row.get(c["key"], "") for c in report["detail_columns"]])
+    if report.get("forecast"):
+        w.writerow([])
+        w.writerow([f"Forecast ({report['forecast']['metric']}, 95% CI)"])
+        w.writerow(["Step", "Forecast", "Lower", "Upper"])
+        for p in report["forecast"]["points"]:
+            w.writerow([p["step"], p["value"], p["lower"], p["upper"]])
+    filename = f"{report['report_type'].lower()}_{report['range']['start']}_{report['range']['end']}.csv"
+    return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
+                              headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+def _pdf_response(report: Dict[str, Any]):
+    from fastapi.responses import StreamingResponse
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle)
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=15 * mm, rightMargin=15 * mm,
+                             topMargin=15 * mm, bottomMargin=15 * mm)
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle("t", parent=styles["Title"], textColor=colors.HexColor("#1e293b"))
+    small = ParagraphStyle("s", parent=styles["Normal"], fontSize=9, textColor=colors.HexColor("#64748b"))
+    story = []
+    story.append(Paragraph(f"CoreOT — {report['report_name']}", title_style))
+    story.append(Paragraph(f"Range: {report['range']['start']} → {report['range']['end']} · "
+                             f"Aggregation: {report['range']['aggregation']} · "
+                             f"Metric: {report['metric']}", small))
+    story.append(Spacer(1, 8))
+
+    # KPIs table
+    kpi_data = [["KPI", "Value"]] + [[k["label"], str(k["value"])] for k in report["kpis"]]
+    t = Table(kpi_data, hAlign="LEFT", colWidths=[80 * mm, 80 * mm])
+    t.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1e3a8a")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#cbd5e1")),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.HexColor("#f8fafc"), colors.white]),
+    ]))
+    story.append(t); story.append(Spacer(1, 10))
+
+    def _make_table(cols, rows, title=None):
+        story.append(Paragraph(title or "", styles["Heading4"]))
+        header = [c["label"] for c in cols]
+        data = [header] + [[str(r.get(c["key"], "")) for c in cols] for r in rows]
+        tbl = Table(data, hAlign="LEFT", repeatRows=1)
+        tbl.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0f172a")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#cbd5e1")),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.HexColor("#f1f5f9"), colors.white]),
+        ]))
+        story.append(tbl); story.append(Spacer(1, 10))
+
+    _make_table(report["columns"], report["rows"], title="Trend")
+    if report.get("detail_rows"):
+        _make_table(report["detail_columns"], report["detail_rows"], title="Detail breakdown")
+    if report.get("forecast"):
+        _make_table(
+            [{"key": "step", "label": "Step"}, {"key": "value", "label": "Forecast"},
+             {"key": "lower", "label": "Lower 95%"}, {"key": "upper", "label": "Upper 95%"}],
+            report["forecast"]["points"],
+            title=f"Forecast — next {len(report['forecast']['points'])} periods (metric: {report['forecast']['metric']})",
+        )
+    doc.build(story)
+    buf.seek(0)
+    filename = f"{report['report_type'].lower()}_{report['range']['start']}_{report['range']['end']}.pdf"
+    return StreamingResponse(buf, media_type="application/pdf",
+                              headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@api.post("/reports/export")
+async def reports_export(req: ReportRunRequest, user: User = Depends(require_module("REPORTS"))):
+    fmt = (req.format or "csv").lower()
+    result = await _compute_report(user, req)
+    await record_audit(user, "report.export", "report", req.report_type,
+                        {"format": fmt, "range": result["range"]})
+    if fmt == "csv":
+        return _csv_response(result)
+    if fmt == "pdf":
+        return _pdf_response(result)
+    if fmt == "json":
+        from fastapi.responses import JSONResponse
+        filename = f"{req.report_type.lower()}_{result['range']['start']}_{result['range']['end']}.json"
+        return JSONResponse(result, headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+    raise HTTPException(status_code=400, detail="format must be csv, pdf or json")
+
+
+class ReportTemplateSave(BaseModel):
+    name: str
+    request: ReportRunRequest
+
+
+@api.get("/reports/templates")
+async def list_report_templates(user: User = Depends(require_module("REPORTS"))):
+    docs = await db.report_templates.find(
+        {"tenant_id": user.tenant_id}, {"_id": 0}
+    ).sort("created_at", -1).to_list(200)
+    return docs
+
+
+@api.post("/reports/templates")
+async def save_report_template(payload: ReportTemplateSave,
+                                user: User = Depends(require_module("REPORTS"))):
+    if not payload.name.strip():
+        raise HTTPException(status_code=400, detail="Template name required")
+    req_dict = payload.request.model_dump()
+    req_dict.pop("format", None)
+    doc = {
+        "id": str(uuid.uuid4()),
+        "tenant_id": user.tenant_id,
+        "name": payload.name.strip(),
+        "request": req_dict,
+        "created_by": user.email,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.report_templates.insert_one(doc.copy())
+    await record_audit(user, "report.template.save", "report_template", doc["id"], {"name": doc["name"]})
+    doc.pop("_id", None)
+    return doc
+
+
+@api.delete("/reports/templates/{template_id}")
+async def delete_report_template(template_id: str,
+                                  user: User = Depends(require_module("REPORTS"))):
+    res = await db.report_templates.delete_one({"id": template_id, "tenant_id": user.tenant_id})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Template not found")
+    await record_audit(user, "report.template.delete", "report_template", template_id)
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------

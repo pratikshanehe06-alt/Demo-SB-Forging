@@ -18,6 +18,7 @@ import EEMSPage from "@/pages/EEMSPage";
 import OEEPage from "@/pages/OEEPage";
 import AuditPage from "@/pages/AuditPage";
 import PlatformAdmin from "@/pages/PlatformAdmin";
+import ReportsPage from "@/pages/ReportsPage";
 
 function landingFor(role) {
   if (role === "OPERATOR") return "/operator";
@@ -65,6 +66,7 @@ export default function App() {
             <Route path="/eems" element={<Protected roles={["TENANT_ADMIN", "CXO", "PRODUCTION_MANAGER"]} requireModule="EEMS"><EEMSPage /></Protected>} />
             <Route path="/oee" element={<Protected roles={["TENANT_ADMIN", "CXO", "PRODUCTION_MANAGER", "SUPERVISOR"]} requireModule="OEE_APS"><OEEPage /></Protected>} />
             <Route path="/audit" element={<Protected roles={["TENANT_ADMIN"]} requireModule="AUDIT"><AuditPage /></Protected>} />
+            <Route path="/reports" element={<Protected roles={["TENANT_ADMIN", "CXO", "PRODUCTION_MANAGER"]} requireModule="REPORTS"><ReportsPage /></Protected>} />
             <Route path="/users" element={<Protected roles={["TENANT_ADMIN", "SUPERVISOR", "PRODUCTION_MANAGER"]}><UsersPage /></Protected>} />
             <Route path="/modules" element={<Protected roles={["TENANT_ADMIN"]}><ModulesPage /></Protected>} />
             <Route path="/operator" element={<BareProtected roles={["OPERATOR"]}><OperatorRunbook /></BareProtected>} />

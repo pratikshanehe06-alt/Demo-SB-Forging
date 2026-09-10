@@ -1,0 +1,30 @@
+{
+  "summary": "Iteration 7 — Reports & Forecasting fully tested. Backend suite /app/backend/tests/test_iteration7.py: 13/13 pass. Covers: GET /api/reports/catalog returns 5 report types (PRODUCTION, OEE, ENERGY, DOWNTIME, MAINTENANCE) with daily/weekly/monthly aggregations; POST /api/reports/run for all 5 types with aggregation=daily & include_forecast=true returns kpis, columns, rows, detail_columns, detail_rows, forecast object; forecast points contain step/value/lower/upper with lower<=value<=upper monotonic invariant validated on every point; bucket counts monthly<weekly<daily verified over 2025 full-year range; plant_id and asset_id filters narrow detail_rows; POST /api/reports/export format=csv returns text/csv attachment containing 'CoreOT'; format=pdf returns application/pdf > 2KB (verified with forecast enabled); format=json returns JSON attachment with report_type field; POST /api/reports/templates creates tenant-scoped template with UUID, GET lists it, DELETE removes it (verified via re-GET); module gating: PUT /api/modules/REPORTS {enabled:false} makes /api/reports/catalog and /api/reports/run return 403, then re-enabled and verified back to 200. Frontend (Tenant Admin on /reports): nav-reports sidebar link visible; reports-page renders; all 5 report-tile-{key} tiles present; Run Production returned 30 trend-rows and 1 detail-row; preset-weekly/monthly/daily update start-date and end-date inputs correctly (weekly = ~12w back, monthly = ~12mo back); switching to OEE tile auto-populates metric to 'oee'; Run OEE renders KPI cards (OEE% 3.8, Availability% 98, Performance% 4.1, Quality% 93.6), forecast chart with 95% CI band + 7 forecast steps, trend data table and Breakdown table; export-csv/pdf/json buttons all trigger downloads with correct filenames (oee_2026-08-12_2026-09-10.csv/.pdf/.json); save-template → template-name-input → template-save-confirm creates template, template-apply-{id} reloads filters, template-delete-{id} removes it with 'Template removed' toast. REPORTS module left ENABLED at end of testing.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iteration7.py",
+    "/app/test_reports/pytest/iter7_results.xml"
+  ],
+  "action_items": [
+    "None for iteration 7. Iteration-4 leftover /api/energy/summary?plant_id filter still open (unrelated, not retested)."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now 2752 lines — well beyond the 700-line guideline. The Reports block alone is ~635 lines (2117-2731) and should live in a dedicated /app/backend/routers/reports.py. Same recommendation stands from iterations 5 & 6.",
+    "_compute_report calls the runner regardless of format; export path re-runs the entire query even though the frontend can already have the result. Consider accepting the pre-computed report dict for export (or a cache key) to avoid double-computation, especially for PDF which is CPU heavy.",
+    "_run_production/_run_energy load up to 20000 rows into memory and re-filter by plant_id in Python. For large tenants push plant_id filter down via a $lookup or by joining asset_id→plant_id before the .find(). Same for _run_oee / _run_downtime / _run_maintenance.",
+    "_linear_forecast lower bound is clamped to max(0, yhat - ci) but 'value' itself is not clamped. If a downward trend crosses zero, forecast points can show value<0 while lower=0 — breaks the lower<=value invariant. Test currently only asserts lower<=value<=upper on non-empty forecasts and these datasets never went negative, but the clamp is asymmetric and should either clamp both or neither.",
+    "ReportsPage.jsx: preset-weekly / preset-monthly compute date ranges in local timezone via toISOString(); mixing UTC and local may skew by a day near midnight boundaries. Not observed today but worth normalising.",
+    "POST /reports/templates persists the ReportRunRequest verbatim including any 'format' field even though templates aren't for export. Consider stripping format on save so an accidentally-saved-from-export payload doesn't include it.",
+    "_parse_range uses datetime.fromisoformat(end_date) without validation — a bad string surfaces as 500 rather than 400. Wrap in try/except → HTTPException 400.",
+    "record_audit is called on every /reports/run and /reports/export — for chatty dashboards this can blow up the audit log; consider debouncing or an opt-in flag."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration7.py"],
+  "success_rate": {"backend": "100% (13/13 iteration-7)", "frontend": "100% of iteration-7 flows"},
+  "test_credentials": "Read from /app/memory/test_credentials.md — SBF / tenantadmin@sbforgtech.com / Admin@123. Login response returns access_token (not token).",
+  "seed_data_creation": "One TEST_iter7_template created and deleted in-test. One UITEST_iter7_tmpl created and deleted via UI. REPORTS module toggled off during gating test and restored to enabled. No residual test data.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Login response key is 'access_token' not 'token'. Reports test-IDs listed in Reports UI review request are all present and functional. To disable a module use PUT /api/modules/{KEY} {enabled:false}; catalog/run then return 403. Frontend chart uses forecast points with dashed line + 95% CI shaded band — visually verified. REACT_APP_BACKEND_URL from /app/frontend/.env; pytest needs load_dotenv('/app/frontend/.env') for env access. Run with `-p xdist -n 1` (session-scoped fixture requires serial exec).",
+  "rca of the issue": "N/A — no iteration-7 bugs found."
+}
