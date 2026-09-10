@@ -5,6 +5,8 @@ import { useAuth } from "@/lib/auth";
 import { useTelemetryStream } from "@/lib/ws";
 import { StatusPill } from "@/components/Pills";
 import MaintenancePanel from "@/components/MaintenancePanel";
+import ThresholdEditor from "@/components/ThresholdEditor";
+import DowntimeReasonChart from "@/components/DowntimeReasonChart";
 import {
   Thermometer, Activity, Zap, Gauge as GaugeIcon, Power, Battery,
   Factory, ArrowLeft, Wifi, WifiOff, RotateCw, MapPin, Droplet,
@@ -98,7 +100,8 @@ export default function Asset360() {
             <p className="text-sm text-slate-500">{asset.name} · {asset.asset_type} · {asset.area_name} · {asset.plant_name}</p>
           </div>
         </div>
-        <div className="flex items-center gap-2 text-xs">
+        <div className="flex items-center gap-3 text-xs">
+          <ThresholdEditor assetId={asset.id} />
           {connected ? (
             <span className="inline-flex items-center gap-1.5 text-emerald-700 font-semibold"><Wifi className="h-3.5 w-3.5" /> Live</span>
           ) : (
@@ -199,6 +202,9 @@ export default function Asset360() {
         <ApmStat label="Downtime" value={metrics?.downtime_min_total ?? 0} unit="min" icon={Clock} color="text-orange-700" />
         <ApmStat label="Maint. Cost YTD" value={`₹${(metrics?.maintenance_cost_ytd || 0).toLocaleString()}`} icon={Wrench} color="text-blue-700" />
       </div>
+
+      {/* Downtime root-cause */}
+      <DowntimeReasonChart assetId={asset.id} />
 
       {/* Trend chart */}
       <div className="bg-white rounded-lg border border-[color:var(--border)] p-5">

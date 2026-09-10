@@ -194,6 +194,7 @@ class Asset(BaseModel):
     health: int = 100
     installation_date: Optional[str] = None
     last_seen: Optional[str] = None
+    thresholds: Optional[Dict[str, Dict[str, float]]] = None
 
 
 class AssetCreate(BaseModel):
@@ -815,6 +816,13 @@ async def ingest_telemetry_internal(payload: TelemetryIn) -> Dict[str, Any]:
                 "tenant_id": asset["tenant_id"]})
     await db.telemetry.insert_one(doc)
 
+    # Per-asset thresholds (fall back to platform defaults)
+    th = asset.get("thresholds") or {}
+    t_warn = (th.get("temperature") or {}).get("warning", 85)
+    t_crit = (th.get("temperature") or {}).get("critical", 100)
+    v_warn = (th.get("vibration") or {}).get("warning", 8)
+    v_crit = (th.get("vibration") or {}).get("critical", 12)
+
     # Derive status from telemetry + explicit override
     new_status = asset.get("status", "OFFLINE")
     if payload.machine_status:
@@ -823,19 +831,29 @@ async def ingest_telemetry_internal(payload: TelemetryIn) -> Dict[str, Any]:
                    "OFF": "OFFLINE", "ON": "RUNNING"}
         new_status = mapping.get(m, m)
     if payload.temperature is not None:
-        if payload.temperature > 100:
+        if payload.temperature > t_crit:
             new_status = "CRITICAL"
-        elif payload.temperature > 85 and new_status in ("RUNNING", "IDLE"):
+        elif payload.temperature > t_warn and new_status in ("RUNNING", "IDLE"):
+            new_status = "WARNING"
+    if payload.vibration is not None:
+        if payload.vibration > v_crit:
+            new_status = "CRITICAL"
+        elif payload.vibration > v_warn and new_status in ("RUNNING", "IDLE"):
             new_status = "WARNING"
     if payload.alarm:
         new_status = "FAULT"
 
     health = asset.get("health", 100)
     if payload.temperature is not None:
-        if payload.temperature > 100:
+        if payload.temperature > t_crit:
             health = min(health, 40)
-        elif payload.temperature > 85:
+        elif payload.temperature > t_warn:
             health = min(health, 65)
+    if payload.vibration is not None:
+        if payload.vibration > v_crit:
+            health = min(health, 45)
+        elif payload.vibration > v_warn:
+            health = min(health, 70)
 
     await db.assets.update_one(
         {"id": asset["id"]},
@@ -1416,6 +1434,83 @@ async def asset_metrics(asset_id: str, user: User = Depends(require_module("APM"
     if not a:
         raise HTTPException(status_code=404, detail="Asset not found")
     return await _compute_asset_metrics(user.tenant_id, a)
+
+
+class ThresholdBand(BaseModel):
+    warning: float = Field(ge=0)
+    critical: float = Field(ge=0)
+
+
+class ThresholdsPayload(BaseModel):
+    temperature: Optional[ThresholdBand] = None
+    vibration: Optional[ThresholdBand] = None
+
+
+DEFAULT_THRESHOLDS = {
+    "temperature": {"warning": 85.0, "critical": 100.0},
+    "vibration": {"warning": 8.0, "critical": 12.0},
+}
+
+
+@api.get("/assets/{asset_id}/thresholds")
+async def get_thresholds(asset_id: str, user: User = Depends(require_module("APM"))):
+    a = await db.assets.find_one({"id": asset_id, "tenant_id": user.tenant_id},
+                                 {"_id": 0, "thresholds": 1, "id": 1})
+    if a is None:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    return {"defaults": DEFAULT_THRESHOLDS, "thresholds": a.get("thresholds") or {}}
+
+
+@api.put("/assets/{asset_id}/thresholds")
+async def set_thresholds(asset_id: str, payload: ThresholdsPayload,
+                         user: User = Depends(require_module("APM"))):
+    if user.role not in ("TENANT_ADMIN", "PRODUCTION_MANAGER"):
+        raise HTTPException(status_code=403, detail="Production Manager or Tenant Admin required")
+    a = await db.assets.find_one({"id": asset_id, "tenant_id": user.tenant_id}, {"_id": 0})
+    if not a:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    thresholds: Dict[str, Dict[str, float]] = {}
+    for k in ("temperature", "vibration"):
+        band = getattr(payload, k)
+        if band is not None:
+            if band.warning > band.critical:
+                raise HTTPException(status_code=400, detail=f"{k} warning must be ≤ critical")
+            thresholds[k] = {"warning": band.warning, "critical": band.critical}
+    if thresholds:
+        await db.assets.update_one(
+            {"id": asset_id, "tenant_id": user.tenant_id},
+            {"$set": {"thresholds": thresholds}},
+        )
+    else:
+        await db.assets.update_one(
+            {"id": asset_id, "tenant_id": user.tenant_id},
+            {"$unset": {"thresholds": ""}},
+        )
+    await record_audit(user, "asset.thresholds", "asset", asset_id, thresholds)
+    return {"ok": True, "thresholds": thresholds}
+
+
+@api.get("/assets/{asset_id}/downtime-breakdown")
+async def asset_downtime_breakdown(asset_id: str, user: User = Depends(require_module("APM")),
+                                   days: int = 30):
+    a = await db.assets.find_one({"id": asset_id, "tenant_id": user.tenant_id}, {"_id": 0, "id": 1})
+    if not a:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    events = await db.downtime_events.find(
+        {"tenant_id": user.tenant_id, "asset_id": asset_id, "started_at": {"$gte": cutoff}},
+        {"_id": 0},
+    ).to_list(500)
+    totals: Dict[str, int] = {}
+    for e in events:
+        totals[e["reason"]] = totals.get(e["reason"], 0) + e.get("duration_min", 0)
+    breakdown = [{"reason": k, "minutes": v} for k, v in sorted(totals.items(), key=lambda x: -x[1])]
+    return {
+        "days": days,
+        "event_count": len(events),
+        "total_minutes": sum(totals.values()),
+        "breakdown": breakdown,
+    }
 
 
 @api.get("/assets/{asset_id}/maintenance")

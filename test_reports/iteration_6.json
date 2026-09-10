@@ -1,0 +1,28 @@
+{
+  "summary": "Iteration 6 end-to-end tested. Backend suite /app/backend/tests/test_iteration6.py: 12/12 pass. Covers: GET /api/assets/{id}/thresholds returns {defaults:{temperature:{85,100},vibration:{8,12}}, thresholds:{}}; PUT as Production Manager with {temperature:70/90, vibration:5/9} → 200 saved + persisted on GET; PUT as Operator → 403; PUT with warning>critical (temp only, vib only, both) → 400 (three parametrized cases); threshold-aware ingest on CNC-DEMO-01 with warn=70/crit=90 → temp=75 flips to WARNING, temp=92 flips to CRITICAL, temp=60 stays RUNNING; vibration ingest with defaults → vib=15 → CRITICAL, vib=9 → WARNING; PUT thresholds writes audit_log with action='asset.thresholds' and correct entity_id (verified via GET /api/audit-logs); GET /api/assets/{id}/downtime-breakdown returns {days:30, event_count, total_minutes, breakdown:[{reason,minutes}]}; module gate 403 when APM disabled (PUT /api/modules/APM {enabled:false}); breakdown=[] and total_minutes=0 for fresh asset. Frontend (Production Manager on Asset 360 CNC-DEMO-01): 'Thresholds' button [data-testid=thresholds-btn] visible in header; dialog opens with 'Temperature (°C)' and 'Vibration (mm/s)' bands including [data-testid=temp-warning/temp-critical/vib-warning/vib-critical] inputs and 'Use default 85/100' + 'Use default 8/12' reset shortcuts; setting temp warn=100/crit=80 + Save shows error toast 'temperature: warning must be ≤ critical' and dialog stays open; setting warn=70/crit=90 + Save shows 'Thresholds saved' toast, dialog closes; re-open shows persisted 70/90. Downtime root-cause block [data-testid=downtime-reasons] renders with 'No downtime in the last 30 days 🎉' empty state (0 events, 0 min) for CNC-DEMO-01. Operator: login redirects to /operator page (not Asset360) — thresholds-btn count=0, asset-360-page count=0, so button MUST NOT render check is satisfied by route-level gating.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iteration6.py",
+    "/app/test_reports/pytest/iter6_results.xml"
+  ],
+  "action_items": [
+    "None for iteration 6. Iteration-4 leftover /api/energy/summary?plant_id filter still open (not retested this iteration)."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now 2108 lines — continues to exceed the 700-line guideline. The new thresholds + downtime-breakdown endpoints sit alongside APM code and would be a natural fit for the previously-suggested apm.py router.",
+    "PUT /api/assets/{id}/thresholds writes {\"thresholds\": thresholds} — when payload is {} this stores an empty dict rather than $unset-ing the field. Functionally fine (ingest falls back to defaults on falsy dict), but semantically 'clear' vs 'set-empty' are conflated in the audit log (metadata is {} either way).",
+    "Threshold validation is `band.warning > band.critical` (strict). Equal warn=crit is accepted, which produces a zero-width warning band (only 'critical' can ever fire). Consider `>=` to force distinct bands, or explicitly document that warn==crit is allowed.",
+    "ingest_telemetry_internal WARNING branch requires `new_status in (\"RUNNING\",\"IDLE\")`; but the CRITICAL branch unconditionally overwrites new_status. Result: if a payload has NO machine_status and previous status is 'STOPPED'/'OFFLINE', a threshold breach at WARNING level is silently dropped while CRITICAL still fires. Not a bug per spec (spec sent machine_status=RUNNING) but worth documenting.",
+    "DowntimeReasonChart catches ALL errors and silently falls back to the empty state. If APM is disabled it will show '🎉' rather than surface the 403 — the parent Asset360 shouldn't even mount the component in that case. Consider gating via feature flag or surfacing the error.",
+    "ThresholdEditor treats blank strings as 'clear this metric'. There's no confirmation UI to indicate to the user that saving with blanks will revert to platform defaults; only the helper text mentions it."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration6.py"],
+  "success_rate": {"backend": "100% (12/12 iteration-6)", "frontend": "100% of iteration-6 flows"},
+  "test_credentials": "Read from /app/memory/test_credentials.md (SBF/tenantadmin/Admin@123, SBF/production/Prod@123, SBF/operator/Operator@123). INGEST_KEY read fresh from /app/backend/.env (value not printed).",
+  "seed_data_creation": "test_downtime_breakdown_empty creates one TEST-DT-{ts} asset and deletes it in-test. All test-modified thresholds on CNC-DEMO-01 are reset to {} (defaults) at the end of each test. Iteration-5 seed data still present (TEST_LOG_* maintenance records, UITEST-* asset) — non-blocking.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Operator role redirects on login to /operator (a per-operator dashboard), so the 'thresholds-btn must not render' check is trivially satisfied — Operator never reaches Asset360 via UI navigation. Direct URL /assets/{id} does NOT render Asset360 for Operator either (route gate). Audit endpoint is /api/audit-logs (NOT /api/audit/logs). Threshold PUT with {} clears overrides; use this to reset CNC-DEMO-01 after any threshold mutation. Ingest WARNING-branch guard requires new_status in RUNNING/IDLE — always send machine_status=RUNNING with threshold-driven tests to get deterministic transitions. DEFAULT_THRESHOLDS: temp 85/100, vibration 8/12.",
+  "rca of the issue": "N/A — no iteration-6 bugs found."
+}
