@@ -1,0 +1,175 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url("https://fonts.googleapis.com/css2?family=Chivo:wght@400;500;600;700;800;900&family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap");
+
+:root {
+    --brand-navy: #1e3a8a;
+    --brand-navy-deep: #172554;
+    --brand-blue: #2563eb;
+    --workspace: #f3f4f6;
+    --card: #ffffff;
+    --border: #e2e8f0;
+    --text-primary: #0f172a;
+    --text-secondary: #475569;
+    --text-tertiary: #64748b;
+}
+
+@layer base {
+    :root {
+        --background: 0 0% 100%;
+        --foreground: 222 47% 11%;
+        --card: 0 0% 100%;
+        --card-foreground: 222 47% 11%;
+        --popover: 0 0% 100%;
+        --popover-foreground: 222 47% 11%;
+        --primary: 224 76% 33%;
+        --primary-foreground: 0 0% 100%;
+        --secondary: 210 40% 96%;
+        --secondary-foreground: 222 47% 11%;
+        --muted: 210 40% 96%;
+        --muted-foreground: 215 16% 47%;
+        --accent: 210 40% 96%;
+        --accent-foreground: 222 47% 11%;
+        --destructive: 0 84% 60%;
+        --destructive-foreground: 0 0% 98%;
+        --border: 214 32% 91%;
+        --input: 214 32% 91%;
+        --ring: 224 76% 33%;
+        --radius: 0.5rem;
+    }
+}
+
+@layer base {
+    * {
+        @apply border-border;
+    }
+    html,
+    body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--workspace);
+        color: var(--text-primary);
+        font-family:
+            "IBM Plex Sans",
+            system-ui,
+            -apple-system,
+            sans-serif;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        font-feature-settings:
+            "cv11" on,
+            "ss01" on;
+    }
+    h1,
+    h2,
+    h3,
+    h4,
+    h5,
+    .font-display {
+        font-family:
+            "Chivo",
+            "IBM Plex Sans",
+            system-ui,
+            sans-serif;
+        letter-spacing: -0.01em;
+    }
+    .font-mono,
+    .tabular {
+        font-family: "IBM Plex Mono", ui-monospace, monospace;
+        font-variant-numeric: tabular-nums;
+    }
+}
+
+/* Status pill dot */
+.pill-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 999px;
+    display: inline-block;
+    margin-right: 6px;
+}
+
+/* Pulse ring for critical/warning */
+.pulse-dot {
+    position: relative;
+}
+.pulse-dot::after {
+    content: "";
+    position: absolute;
+    inset: -3px;
+    border-radius: 999px;
+    animation: pulseRing 1.5s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+    background: currentColor;
+    opacity: 0.4;
+}
+@keyframes pulseRing {
+    0% {
+        transform: scale(0.85);
+        opacity: 0.7;
+    }
+    80%,
+    100% {
+        transform: scale(1.6);
+        opacity: 0;
+    }
+}
+
+/* Live-value flash */
+.telemetry-flash {
+    animation: flashHighlight 900ms ease-out;
+}
+@keyframes flashHighlight {
+    0% {
+        background-color: rgba(37, 99, 235, 0.16);
+    }
+    100% {
+        background-color: transparent;
+    }
+}
+
+/* Sidebar item */
+.side-item {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    padding: 0.55rem 0.85rem;
+    border-radius: 8px;
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+    font-weight: 500;
+    transition:
+        background-color 150ms ease,
+        color 150ms ease;
+}
+.side-item:hover {
+    background-color: #f1f5f9;
+    color: var(--text-primary);
+}
+.side-item.active {
+    background: #eef4ff;
+    color: var(--brand-navy);
+    font-weight: 600;
+}
+
+/* Login industrial illustration */
+.login-illustration {
+    background:
+        radial-gradient(
+            circle at 30% 20%,
+            rgba(37, 99, 235, 0.25),
+            transparent 50%
+        ),
+        radial-gradient(
+            circle at 80% 80%,
+            rgba(30, 58, 138, 0.35),
+            transparent 55%
+        ),
+        linear-gradient(180deg, #f8fafc 0%, #e0e7ff 100%);
+}
+
+/* Data-testid usage table row hover */
+.data-row:hover {
+    background-color: #f8fafc;
+}

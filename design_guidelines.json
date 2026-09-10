@@ -1,0 +1,113 @@
+{
+  "theme": "light",
+  "theme_strategy": "Industrial Enterprise Dashboard. Navy blue (#1E3A8A) header with a crisp light gray workspace. Focus on clarity, data density, and technical authority.",
+  "typography": {
+    "headings": "Chivo",
+    "body": "IBM Plex Sans",
+    "mono": "IBM Plex Mono",
+    "rules": [
+      "Avoid Inter, Roboto, Lato.",
+      "Use Chivo for high-level module names and dashboard headers (e.g., 'Tenant Admin Dashboard').",
+      "Use IBM Plex Sans for tables, body text, forms, and secondary text.",
+      "Use IBM Plex Mono (or tabular lining in Plex Sans) for ALL live telemetry data, KPIs, and numbers to ensure alignment when values fluctuate.",
+      "Overlines and labels must be uppercase, tracking-[0.1em], and text-xs."
+    ]
+  },
+  "colors": {
+    "background": {
+      "workspace": "#F3F4F6",
+      "card": "#FFFFFF",
+      "header": "#1E3A8A",
+      "sidebar": "#FFFFFF"
+    },
+    "text": {
+      "primary": "#0F172A",
+      "secondary": "#475569",
+      "tertiary": "#64748B",
+      "on_header": "#FFFFFF"
+    },
+    "status": {
+      "RUNNING": { "bg": "#DCFCE7", "text": "#166534", "border": "#86EFAC" },
+      "STOPPED": { "bg": "#F1F5F9", "text": "#475569", "border": "#CBD5E1" },
+      "IDLE": { "bg": "#FEF9C3", "text": "#854D0E", "border": "#FDE047" },
+      "WARNING": { "bg": "#FFEDD5", "text": "#9A3412", "border": "#FDBA74" },
+      "FAULT": { "bg": "#FEE2E2", "text": "#991B1B", "border": "#FCA5A5" },
+      "CRITICAL": { "bg": "#7F1D1D", "text": "#FEF2F2", "border": "#EF4444" },
+      "OFFLINE": { "bg": "#E2E8F0", "text": "#334155", "border": "#94A3B8" }
+    },
+    "health_gradient": {
+      "green": "#22C55E",
+      "orange": "#F59E0B",
+      "red": "#EF4444"
+    },
+    "forbidden": ["Purple gradients", "Teal blue dashboards (unless explicitly required)", "Full-screen gradients"]
+  },
+  "visual_enhancers": {
+    "surfaces": [
+      "Cards: Flat white background (#FFFFFF), crisp 1px border (#E2E8F0), no shadow by default, subtle shadow-sm on hover.",
+      "Header: Solid Navy Blue (#1E3A8A) with a hard bottom border or slight drop shadow.",
+      "Sidebar: Flat white, right border (#E2E8F0)."
+    ],
+    "status_pills": "Capsule shape (rounded-full), distinct text, background, and border colors (1px). Include a small filled circle (dot) indicator inside the pill before the text for extra visual anchor."
+  },
+  "layouts": {
+    "login": {
+      "grid": "grid-cols-1 lg:grid-cols-2",
+      "left_panel": "Illustration background with an overlay (bg-blue-900/40), brand typography 'CoreOT™', tagline 'Connect. Analyze. Transform. Automate. Humanize.'",
+      "right_panel": "Clean white card form centered. Fields: Tenant/Company dropdown, Username, Password, Remember me, Forgot password, Sign In button. Footer: 'Secure. Scalable. Smart.'"
+    },
+    "dashboard": {
+      "structure": "Top Header (Navy Blue) + Left Sidebar (White) + Main Workspace (Light Gray).",
+      "grid": "Use High Density Grid (Bento Grid Protocol - Mode B).",
+      "spacing": "Tight gaps (gap-4 or gap-6). Utilize all pixels. 16px to 24px padding within cards."
+    },
+    "asset_list": "Full-width table layout, filters bar at the top, pagination at the bottom.",
+    "asset_360": "Grid structure for live telemetry. Top row: Key status/health. Middle: Live charts (Recharts) and Gauge charts. Bottom: Telemetry cards (Vibration, Temp, RPM, etc.)."
+  },
+  "motion": {
+    "telemetry": "Apply a brief, subtle highlight (e.g., bg-blue-50 transition) on telemetry values when they update via WebSocket. Use Framer Motion for smooth number transitions.",
+    "status_changes": "Status dot indicator should 'pulse' (ping animation) when in WARNING or CRITICAL state.",
+    "interactions": "Hover states on all buttons and table rows (e.g., hover:bg-slate-50). Ensure text contrast meets standards during interaction."
+  },
+  "components": {
+    "instructions_to_main_agent": [
+      "Use standard HTML/Tailwind for structural layouts to ensure maximum customization.",
+      "Use Shadcn UI for complex interactives (Select, Table, DropdownMenu, Tabs).",
+      "Do NOT use HTML `<select>` or `<input type='date'>`. Use Shadcn variants.",
+      "For charts, use Recharts (or Shadcn Chart wrappers). Ensure charts use the industrial color palette and are readable.",
+      "Ensure all status badges use the color tokens defined in the guidelines.",
+      "Asset Hierarchy should be implemented as a recursive Tree view component with expandable/collapsible nodes.",
+      "KPI Cards must include the primary metric (large, IBM Plex Mono) and a secondary delta indicator (e.g., % change)."
+    ]
+  },
+  "accessibility": {
+    "contrast": "Maintain WCAG AA (4.5:1 for standard text).",
+    "focus": "All interactive elements must have clear focus rings (e.g., focus:ring-2 focus:ring-blue-600 focus:outline-none).",
+    "data_testid": "Add data-testid attributes to all key elements (e.g., data-testid='tenant-selector', data-testid='login-button', data-testid='asset-health-badge')."
+  },
+  "media": {
+    "images": [
+      {
+        "url": "https://images.unsplash.com/photo-1543304376-1ae7c2be5e59?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1Nzl8MHwxfHNlYXJjaHwxfHxpbmR1c3RyaWFsJTIwZmFjdG9yeSUyMGNpdHklMjBpbGx1c3RyYXRpb24lMjBibHVlfGVufDB8fHx8MTc4OTA2NDczN3ww&ixlib=rb-4.1.0&q=85",
+        "description": "Industrial architectural building in blue tones",
+        "category": "Login screen left panel background illustration"
+      }
+    ],
+    "icons": "Use lucide-react for all icons (Dashboard, Assets, Users, Alarms, etc.). Provide consistent stroke-width (1.5 or 2)."
+  },
+  "libraries": {
+    "charts": "Recharts (LineChart for Alarms Trend, BarChart for Assets by Area, PieChart for Asset Health).",
+    "icons": "lucide-react",
+    "motion": "framer-motion (for telemetry value updates and pulses)"
+  },
+  "UNIVERSAL GUIDELINES FOR MAIN AGENT": [
+    "Do not center-align the app container. No generic `.App { text-align: center; }`.",
+    "Apply layered design elements for depth, but keep it clean (industrial style, not consumer app).",
+    "Never apply universal transition (`transition: all`). Target specific properties.",
+    "Use pill-shaped status badges.",
+    "Do not use transparent backgrounds for dropdowns or floating menus. Always use solid white or gray with borders and shadow.",
+    "Always include `data-testid` on all interactive and informational elements.",
+    "Prioritize Shadcn components from `src/components/ui`.",
+    "Use `sonner` for toast notifications."
+  ]
+}
