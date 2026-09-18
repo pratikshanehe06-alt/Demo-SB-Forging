@@ -7,18 +7,36 @@ import { StatusPill } from "@/components/Pills";
 export default function AssetHierarchyPage() {
   const [tree, setTree] = useState([]);
   const [expanded, setExpanded] = useState({});
+  const [initialized, setInitialized] = useState(false);
 
   useEffect(() => {
-    api.get("/assets/hierarchy").then((r) => {
-      setTree(r.data);
-      // expand first plant + all its areas by default
-      const init = {};
-      r.data.forEach((p) => {
-        init[p.id] = true;
-        p.areas.forEach((a) => (init[a.id] = true));
+    let cancelled = false;
+
+    function fetchTree() {
+      api.get("/assets/hierarchy").then((r) => {
+        if (cancelled) return;
+        setTree(r.data);
+        if (!initialized) {
+          // expand first plant + all its areas by default, only on first load
+          const init = {};
+          r.data.forEach((p) => {
+            init[p.id] = true;
+            p.areas.forEach((a) => (init[a.id] = true));
+          });
+          setExpanded(init);
+          setInitialized(true);
+        }
       });
-      setExpanded(init);
-    });
+    }
+
+    fetchTree();
+    const interval = setInterval(fetchTree, 5000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function toggle(id) { setExpanded((e) => ({ ...e, [id]: !e[id] })); }
