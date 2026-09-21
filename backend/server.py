@@ -46,6 +46,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(na
 logger = logging.getLogger("coreot")
 
 MONGO_URL = os.environ["MONGO_URL"]
+print(MONGO_URL)
 DB_NAME = os.environ["DB_NAME"]
 JWT_SECRET = os.environ.get("JWT_SECRET", "coreot-dev-secret-change-me")
 JWT_ALG = "HS256"
@@ -1151,6 +1152,44 @@ async def asset_hierarchy(user: User = Depends(get_current_user)):
             })
         tree.append({"id": p["id"], "name": p["name"], "areas": p_areas})
     return tree
+
+@api.get("/assets/hierarchy")
+async def asset_hierarchy(user: User = Depends(get_current_user)):
+    plants = await db.plants.find({"tenant_id": user.tenant_id}, {"_id": 0}).to_list(50)
+    areas = await db.areas.find({"tenant_id": user.tenant_id}, {"_id": 0}).to_list(200)
+    assets = await db.assets.find({"tenant_id": user.tenant_id}, {"_id": 0}).to_list(1000)
+    tree = []
+    for p in plants:
+        p_areas = []
+        for a in [x for x in areas if x["plant_id"] == p["id"]]:
+            p_areas.append({
+                "id": a["id"],
+                "name": a["name"],
+                "assets": [{"id": x["id"], "name": x["name"], "asset_code": x["asset_code"],
+                            "status": x["status"], "asset_type": x["asset_type"]}
+                           for x in assets if x["area_id"] == a["id"]],
+            })
+        tree.append({"id": p["id"], "name": p["name"], "areas": p_areas})
+    return tree
+
+
+@api.get("/assets/downtime-summary")
+async def assets_downtime_summary(user: User = Depends(get_current_user), days: int = 1):
+    """Bulk downtime totals per asset for the current tenant, over the last `days` days.
+    Used by the Asset Hierarchy card view so it doesn't need one call per asset.
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    events = await db.downtime_events.find(
+        {"tenant_id": user.tenant_id, "started_at": {"$gte": cutoff}},
+        {"_id": 0},
+    ).to_list(5000)
+    summary: Dict[str, Dict[str, Any]] = {}
+    for e in events:
+        s = summary.setdefault(e["asset_id"], {"asset_id": e["asset_id"], "downtime_min": 0, "events": 0})
+        s["downtime_min"] += e.get("duration_min", 0)
+        s["events"] += 1
+    return list(summary.values())
+
 
 
 @api.get("/assets/{asset_id}")
