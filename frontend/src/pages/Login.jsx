@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Eye, EyeOff, Factory } from "lucide-react";
 import { useAuth } from "@/lib/auth";
+import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -11,9 +12,9 @@ import {
 } from "@/components/ui/select";
 import { toast } from "sonner";
 
-const DEMO_TENANTS = [
+// Fallback only used if /api/tenants can't be reached (e.g. backend down).
+const FALLBACK_TENANTS = [
   { code: "SBF", name: "SB Forgtech Pvt Ltd" },
-  { code: "ABC", name: "ABC Manufacturing Pvt Ltd" },
   { code: "PLATFORM", name: "CoreOT Platform (Super Admin)" },
 ];
 
@@ -29,12 +30,29 @@ const DEMO_CREDS = [
 export default function LoginPage() {
   const { login } = useAuth();
   const navigate = useNavigate();
+  const [tenants, setTenants] = useState(FALLBACK_TENANTS);
+  const [tenantsLoading, setTenantsLoading] = useState(true);
   const [tenantCode, setTenantCode] = useState("SBF");
   const [email, setEmail] = useState("tenantadmin@sbforgtech.com");
   const [password, setPassword] = useState("Admin@123");
   const [showPwd, setShowPwd] = useState(false);
   const [remember, setRemember] = useState(true);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    api.get("/tenants")
+      .then((r) => {
+        if (r.data && r.data.length > 0) {
+          setTenants(r.data);
+          // Keep current selection if it still exists, otherwise default to the first tenant
+          setTenantCode((prev) => (r.data.some((t) => t.code === prev) ? prev : r.data[0].code));
+        }
+      })
+      .catch(() => {
+        // silently fall back to FALLBACK_TENANTS already in state
+      })
+      .finally(() => setTenantsLoading(false));
+  }, []);
 
   async function onSubmit(e) {
     e.preventDefault();
@@ -99,12 +117,12 @@ export default function LoginPage() {
           <form onSubmit={onSubmit} className="mt-8 space-y-5">
             <div>
               <Label className="text-xs uppercase tracking-wider font-semibold text-slate-600">Tenant / Company</Label>
-              <Select value={tenantCode} onValueChange={setTenantCode}>
+              <Select value={tenantCode} onValueChange={setTenantCode} disabled={tenantsLoading}>
                 <SelectTrigger data-testid="login-tenant" className="mt-1.5 bg-white h-11">
-                  <SelectValue placeholder="Select company" />
+                  <SelectValue placeholder={tenantsLoading ? "Loading tenants…" : "Select company"} />
                 </SelectTrigger>
                 <SelectContent className="bg-white">
-                  {DEMO_TENANTS.map((t) => (
+                  {tenants.map((t) => (
                     <SelectItem key={t.code} value={t.code}>{t.name}</SelectItem>
                   ))}
                 </SelectContent>

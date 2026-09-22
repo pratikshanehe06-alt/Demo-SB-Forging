@@ -1,9 +1,10 @@
-import { Link, NavLink, useNavigate } from "react-router-dom";
+import { Link, NavLink, useNavigate, useLocation } from "react-router-dom";
 import { useEffect, useState } from "react";
 import {
   LayoutDashboard, Boxes, Network, Users, ShieldCheck, ToggleRight,
   KeyRound, BellRing, FileBarChart2, ClipboardList, Settings, Search, Bell, LogOut, ChevronDown,
-  TrendingUp, ShieldAlert, Factory, FileSpreadsheet
+  TrendingUp, ShieldAlert, Factory, FileSpreadsheet, Flame, LayoutGrid, HeartPulse, Wrench, Activity, Sun, Droplet,
+  Package, ClipboardCheck, UserCheck, IndianRupee,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { usePlant } from "@/lib/plantContext";
@@ -15,7 +16,12 @@ import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { useTelemetryStream } from "@/lib/ws";
 
-function navFor(role, modules) {
+const WORKSPACES = {
+  APM: { label: "APM Workspace", icon: LayoutGrid, home: "/dashboard" },
+  FIRE_SAFETY: { label: "Fire & Safety Workspace", icon: Flame, home: "/fire-safety" },
+};
+
+function navForApm(role, modules) {
   const items = [];
   if (role === "CXO") items.push({ to: "/cxo", label: "CXO Board", icon: TrendingUp });
   if (["TENANT_ADMIN", "PRODUCTION_MANAGER", "SUPERVISOR"].includes(role)) {
@@ -23,39 +29,88 @@ function navFor(role, modules) {
   }
   if (role === "TENANT_ADMIN") items.push({ to: "/cxo", label: "CXO Board", icon: TrendingUp });
 
-  // APM section
   if (modules?.APM !== false) {
     items.push({
       section: "APM", label: "APM", icon: Boxes,
       children: [
-        { to: "/assets", label: "Assets", icon: Boxes },
+        { to: "/assets", label: "Asset Status – List", icon: Boxes },
+        { to: "/assets/health", label: "Asset Health Overview", icon: HeartPulse },
+        { to: "/assets/predictive", label: "Predictive Maintenance", icon: Wrench },
         { to: "/assets/hierarchy", label: "Asset Hierarchy", icon: Network },
         { to: "/assets/compare", label: "Asset Comparison", icon: TrendingUp },
+        { to: "/alarms", label: "Alarms & Events", icon: BellRing },
       ],
     });
   }
-  // Users - Tenant Admin, Supervisor, Production Manager
+  items.push({ to: "/work-orders", label: "Work Orders", icon: ClipboardList, disabled: true });
+  return items;
+}
+
+function navForFireSafety() {
+  return [
+    { to: "/fire-safety", label: "Command Center", icon: Flame },
+    {
+      section: "Fire Assets", label: "Assets", icon: ShieldAlert,
+      children: [
+        { to: "/fire-safety/assets", label: "Asset Status", icon: ShieldAlert },
+        { to: "/fire-safety/assets/health", label: "Asset Health Overview", icon: HeartPulse },
+        { to: "/fire-safety/assets/predictive", label: "Predictive Maintenance", icon: Wrench },
+        { to: "/fire-safety/zones", label: "Fire Zones", icon: Network },
+        { to: "/fire-safety/assets/compare", label: "Asset Comparison", icon: TrendingUp },
+        { to: "/fire-safety/alarms", label: "Alarms & Events", icon: BellRing },
+      ],
+    },
+    { to: "/fire-safety/incidents", label: "Incidents", icon: ClipboardList },
+  ];
+}
+
+function navCommonModules(modules) {
+  // Independent modules — not tied to either APM or Fire & Safety, so
+  // they stay visible no matter which workspace is active.
+  const items = [];
+  if (modules?.OEE_APS) items.push({ to: "/oee", label: "OEE & APS", icon: Settings });
+  if (modules?.EEMS) {
+    items.push({
+      section: "EEMS", label: "EEMS", icon: FileBarChart2,
+      children: [
+        { to: "/eems", label: "EMS Overview", icon: FileBarChart2 },
+        { to: "/pqi", label: "PQI Overview", icon: Activity },
+        { to: "/derms", label: "DERMS Overview", icon: Sun },
+        { to: "/ums", label: "UMS Overview", icon: Droplet },
+      ],
+    });
+  }
+  if (modules?.SMART_INVENTORY) items.push({ to: "/inventory", label: "Smart Inventory", icon: Package });
+  if (modules?.TQC) items.push({ to: "/tqc", label: "TQC", icon: ClipboardCheck });
+  if (modules?.DIGITAL_WORKFORCE) items.push({ to: "/workforce", label: "Digital Workforce", icon: UserCheck });
+  if (modules?.FINANCIAL_INTELLIGENCE) items.push({ to: "/finance", label: "Financial Intelligence", icon: IndianRupee });
+  if (modules?.AI_COPILOT) items.push({ to: "/copilot", label: "AI Copilot", icon: ShieldCheck, disabled: true });
+  return items;
+}
+
+function navShared(role, modules) {
+  // Items common to every workspace: users, reports, audit, admin
+  const items = [];
   if (["TENANT_ADMIN", "SUPERVISOR", "PRODUCTION_MANAGER"].includes(role)) {
     items.push({ to: "/users", label: "Users", icon: Users });
   }
   if (role === "TENANT_ADMIN") items.push({ to: "/modules", label: "Module Access", icon: ToggleRight });
-
-  if (modules?.OEE_APS) items.push({ to: "/oee", label: "OEE & APS", icon: Settings });
-  if (modules?.EEMS) items.push({ to: "/eems", label: "EEMS", icon: FileBarChart2 });
-  if (modules?.AI_COPILOT) items.push({ to: "/copilot", label: "AI Copilot", icon: ShieldCheck, disabled: true });
   if (modules?.REPORTS) items.push({ to: "/reports", label: "Reports", icon: FileSpreadsheet });
   if (modules?.AUDIT && role === "TENANT_ADMIN") items.push({ to: "/audit", label: "Audit Logs", icon: KeyRound });
-
-  items.push({ to: "/alarms", label: "Alarms", icon: BellRing, disabled: true });
-  items.push({ to: "/work-orders", label: "Work Orders", icon: ClipboardList, disabled: true });
   items.push({ to: "/settings", label: "Settings", icon: Settings, disabled: true });
   return items;
+}
+
+function navFor(role, modules, workspace) {
+  const workspaceItems = workspace === "FIRE_SAFETY" ? navForFireSafety() : navForApm(role, modules);
+  return [...workspaceItems, ...navCommonModules(modules), ...navShared(role, modules)];
 }
 
 export default function Layout({ children }) {
   const { user, tenant, logout, token, modules, refreshModules } = useAuth();
   const { plants, selectedPlantId, selectPlant } = usePlant();
   const navigate = useNavigate();
+  const location = useLocation();
   const [escalations, setEscalations] = useState([]);
   const { subscribe } = useTelemetryStream(token);
 
@@ -67,9 +122,49 @@ export default function Layout({ children }) {
     });
   }, [subscribe, refreshModules]);
 
-  const NAV = navFor(user?.role, modules);
-  const showPlantSwitcher = ["TENANT_ADMIN", "CXO", "PRODUCTION_MANAGER"].includes(user?.role);
+  const hasBothWorkspaces = modules?.APM !== false && modules?.FIRE_SAFETY === true;
+
+  // Workspace is sticky (persisted), not re-derived from every URL change.
+  // Otherwise clicking a shared page (Users, Reports, Settings — none of
+  // which live under /fire-safety/*) would silently flip the sidebar back
+  // to APM even though the user never left the Fire & Safety workspace.
+  const [activeWorkspace, setActiveWorkspace] = useState(() => {
+    if (typeof window === "undefined") return "APM";
+    const stored = window.localStorage.getItem("coreot_workspace");
+    if (stored && WORKSPACES[stored]) return stored;
+    return location.pathname.startsWith("/fire-safety") ? "FIRE_SAFETY" : "APM";
+  });
+
+  // If the user lands directly on a /fire-safety/* URL (bookmark, refresh,
+  // direct link) while the stored workspace says APM, sync to Fire so the
+  // sidebar matches what they're actually looking at.
+  useEffect(() => {
+    if (location.pathname.startsWith("/fire-safety") && activeWorkspace !== "FIRE_SAFETY") {
+      setActiveWorkspace("FIRE_SAFETY");
+      window.localStorage.setItem("coreot_workspace", "FIRE_SAFETY");
+    }
+  }, [location.pathname, activeWorkspace]);
+
+  // If a tenant loses access to a workspace (module toggled off) while it's
+  // the active one, fall back to APM so we don't get stuck on a dead workspace.
+  useEffect(() => {
+    if (activeWorkspace === "FIRE_SAFETY" && modules?.FIRE_SAFETY === false) {
+      setActiveWorkspace("APM");
+      window.localStorage.setItem("coreot_workspace", "APM");
+    }
+  }, [activeWorkspace, modules]);
+
+  const workspaceMeta = WORKSPACES[activeWorkspace];
+  const NAV = navFor(user?.role, modules, activeWorkspace);
+  const showPlantSwitcher = ["TENANT_ADMIN", "CXO", "PRODUCTION_MANAGER"].includes(user?.role) && activeWorkspace === "APM";
   const selectedPlant = plants.find((p) => p.id === selectedPlantId);
+
+  function switchWorkspace(key) {
+    if (key === activeWorkspace) return;
+    setActiveWorkspace(key);
+    window.localStorage.setItem("coreot_workspace", key);
+    navigate(WORKSPACES[key].home);
+  }
 
   return (
     <div className="min-h-screen flex flex-col bg-[var(--workspace)]">
@@ -92,6 +187,33 @@ export default function Layout({ children }) {
             <DropdownMenuItem>{tenant?.name}</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+
+        {hasBothWorkspaces && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button data-testid="workspace-switcher" className="ml-2 flex items-center gap-2 rounded-md bg-white/10 hover:bg-white/15 border border-white/20 px-3 h-9 text-sm">
+                <workspaceMeta.icon className="h-4 w-4" />
+                <span className="font-medium">{workspaceMeta.label}</span>
+                <ChevronDown className="h-4 w-4" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-64 bg-white">
+              <DropdownMenuLabel>Switch workspace</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {Object.entries(WORKSPACES).map(([key, w]) => (
+                <DropdownMenuItem
+                  key={key}
+                  onClick={() => switchWorkspace(key)}
+                  data-testid={`workspace-option-${key.toLowerCase()}`}
+                  className={cn("flex items-center gap-2", key === activeWorkspace && "bg-slate-100 font-medium")}
+                >
+                  <w.icon className="h-4 w-4" />
+                  <span>{w.label}</span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
 
         {showPlantSwitcher && (
           <DropdownMenu>
@@ -193,12 +315,26 @@ export default function Layout({ children }) {
         {/* Sidebar */}
         <aside className="w-60 bg-white border-r border-[color:var(--border)] py-4 px-3">
           <div className="text-[10px] uppercase tracking-[0.14em] font-semibold text-slate-400 px-3 mb-2">
-            {user?.role === "CXO" ? "Executive" : "Tenant Administration"}
+            {activeWorkspace === "FIRE_SAFETY"
+              ? "Fire & Safety"
+              : user?.role === "CXO" ? "Executive" : "Tenant Administration"}
           </div>
           <nav className="flex flex-col gap-0.5">
             {NAV.map((item) => (
               item.section ? (
                 <SidebarSection key={item.section} item={item} />
+              ) : !item.to ? (
+                // Inert placeholder — no route yet, so no NavLink at all
+                // (avoids falling through to the catch-all route).
+                <div
+                  key={item.label}
+                  data-testid={`nav-${item.label.toLowerCase().replace(/[\s&]+/g, "-")}`}
+                  className="side-item opacity-50 cursor-not-allowed select-none"
+                  title="Coming soon"
+                >
+                  <item.icon className="h-4 w-4" />
+                  <span>{item.label}</span>
+                </div>
               ) : (
                 <NavLink
                   key={item.to + item.label}

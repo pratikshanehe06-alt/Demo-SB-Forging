@@ -9,9 +9,24 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter
 } from "@/components/ui/dialog";
 import {
-  Building2, Plus, LogOut, Users, Boxes, MapPin, Trash2, ShieldCheck
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue
+} from "@/components/ui/select";
+import {
+  Building2, Plus, LogOut, Users, Boxes, MapPin, Trash2, ShieldCheck, LayoutTemplate
 } from "lucide-react";
 import { toast } from "sonner";
+
+const TEMPLATE_LABELS = {
+  APM: "Asset Performance Management",
+  FIRE_SAFETY: "Fire & Safety",
+  BOTH: "APM + Fire & Safety",
+};
+
+const TEMPLATE_BADGE_STYLES = {
+  APM: "text-indigo-700 bg-indigo-50 border-indigo-200",
+  FIRE_SAFETY: "text-red-700 bg-red-50 border-red-200",
+  BOTH: "text-emerald-700 bg-emerald-50 border-emerald-200",
+};
 
 export default function PlatformAdmin() {
   const { user, logout, tenant } = useAuth();
@@ -80,6 +95,7 @@ export default function PlatformAdmin() {
               <tr className="text-left text-[11px] uppercase tracking-wider text-slate-500 border-b">
                 <th className="py-3 px-2 font-semibold">Tenant</th>
                 <th className="py-3 px-2 font-semibold">Code</th>
+                <th className="py-3 px-2 font-semibold">Template</th>
                 <th className="py-3 px-2 font-semibold text-right">Users</th>
                 <th className="py-3 px-2 font-semibold text-right">Plants</th>
                 <th className="py-3 px-2 font-semibold text-right">Assets</th>
@@ -91,6 +107,11 @@ export default function PlatformAdmin() {
                 <tr key={t.id} className="data-row border-b last:border-0" data-testid={`tenant-row-${t.code}`}>
                   <td className="py-3 px-2 font-semibold text-slate-900">{t.name}</td>
                   <td className="py-3 px-2 font-mono text-xs text-slate-600">{t.code}</td>
+                  <td className="py-3 px-2">
+                    <span className={`px-1.5 py-0.5 rounded border text-[10px] font-medium ${TEMPLATE_BADGE_STYLES[t.template] || "text-slate-600 bg-slate-50 border-slate-200"}`}>
+                      {TEMPLATE_LABELS[t.template] || t.template || "APM"}
+                    </span>
+                  </td>
                   <td className="py-3 px-2 text-right font-mono tabular">{t.users_count}</td>
                   <td className="py-3 px-2 text-right font-mono tabular">{t.plants_count}</td>
                   <td className="py-3 px-2 text-right font-mono tabular">{t.assets_count}</td>
@@ -114,7 +135,9 @@ export default function PlatformAdmin() {
 }
 
 function AddTenantDialog({ open, onOpenChange, onCreated }) {
-  const [form, setForm] = useState({ code: "", name: "", admin_email: "", admin_name: "", admin_password: "" });
+  const [form, setForm] = useState({
+    code: "", name: "", admin_email: "", admin_name: "", admin_password: "", template: "APM",
+  });
   function set(k, v) { setForm((f) => ({ ...f, [k]: v })); }
 
   async function submit() {
@@ -123,10 +146,10 @@ function AddTenantDialog({ open, onOpenChange, onCreated }) {
     }
     try {
       await api.post("/platform/tenants", form);
-      toast.success(`Tenant ${form.code} created`);
+      toast.success(`Tenant ${form.code} created (${TEMPLATE_LABELS[form.template]})`);
       onOpenChange(false);
       onCreated();
-      setForm({ code: "", name: "", admin_email: "", admin_name: "", admin_password: "" });
+      setForm({ code: "", name: "", admin_email: "", admin_name: "", admin_password: "", template: "APM" });
     } catch (e) {
       toast.error(e.response?.data?.detail || "Create failed");
     }
@@ -139,6 +162,40 @@ function AddTenantDialog({ open, onOpenChange, onCreated }) {
         <div className="grid grid-cols-2 gap-4 py-2">
           <F label="Tenant Code" hint="e.g. ACME"><Input data-testid="new-tenant-code" value={form.code} onChange={(e) => set("code", e.target.value.toUpperCase())} /></F>
           <F label="Tenant Name"><Input data-testid="new-tenant-name" value={form.name} onChange={(e) => set("name", e.target.value)} /></F>
+
+          <div className="col-span-2">
+            <F label="Template" hint="Determines which modules are enabled for this tenant">
+              <Select value={form.template} onValueChange={(v) => set("template", v)}>
+                <SelectTrigger data-testid="new-tenant-template" className="h-10">
+                  <div className="flex items-center gap-2">
+                    <LayoutTemplate className="h-4 w-4 text-slate-400" />
+                    <SelectValue />
+                  </div>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="APM" data-testid="template-option-apm">
+                    <div>
+                      <div className="font-medium">Asset Performance Management</div>
+                      <div className="text-xs text-slate-500">Industrial assets, telemetry, OEE, energy</div>
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="FIRE_SAFETY" data-testid="template-option-fire">
+                    <div>
+                      <div className="font-medium">Fire & Safety Command Center</div>
+                      <div className="text-xs text-slate-500">Zones, hydrants, sprinklers, fire pumps, tanks</div>
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="BOTH" data-testid="template-option-both">
+                    <div>
+                      <div className="font-medium">Both</div>
+                      <div className="text-xs text-slate-500">Full APM + Fire & Safety modules enabled</div>
+                    </div>
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </F>
+          </div>
+
           <div className="col-span-2 border-t pt-3 mt-1 text-[11px] uppercase tracking-wider font-semibold text-slate-500">Initial Tenant Admin</div>
           <F label="Admin Name"><Input value={form.admin_name} onChange={(e) => set("admin_name", e.target.value)} /></F>
           <F label="Admin Email"><Input type="email" value={form.admin_email} onChange={(e) => set("admin_email", e.target.value)} /></F>
