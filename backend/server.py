@@ -54,23 +54,34 @@ JWT_EXPIRES_MIN = 60 * 24 * 7  # 7 days
 
 ESCALATION_MINUTES = int(os.environ.get("ESCALATION_MINUTES", "5"))
 
-
 MODULE_CATALOG: List[Dict[str, Any]] = [
-    {"key": "APM", "name": "Asset Performance Management",
-     "description": "Assets registry, health, live telemetry, digital-twin animation.",
+    {"key": "APM", "name": "APM – Asset Performance Management System",
+     "description": "Asset status, health, predictive maintenance, alarms & events, audit and reporting.",
      "default": True, "gates": ["assets", "hierarchy", "asset360", "operator"]},
-    {"key": "EEMS", "name": "Enterprise Energy Management",
-     "description": "EMS, PQI, DERMS and Utility metering across every plant.",
+    {"key": "EEMS", "name": "EEMS – Enterprise Energy Management System",
+     "description": "EMS, Power Quality Intelligence (PQI), DERMS (Solar/BESS/EV/DG) and Utility Management (UMS).",
      "default": True, "gates": ["energy"]},
-    {"key": "DIGITAL_TWIN", "name": "Digital Twin",
-     "description": "Visual real-time twin of every machine on the floor.",
+    {"key": "DIGITAL_TWIN", "name": "Digital Twin & Simulation",
+     "description": "Visual real-time twin of every machine on the floor, plant-wise setup.",
      "default": True, "gates": ["twin"]},
-    {"key": "OEE_APS", "name": "OEE & APS",
-     "description": "Availability × Performance × Quality plus advanced planning.",
-     "default": True, "gates": ["oee", "aps"]},
-    {"key": "AI_COPILOT", "name": "AI Copilot",
+    {"key": "AI_COPILOT", "name": "AI-Copilot",
      "description": "Natural-language insights, downtime RCA and recommendations.",
      "default": False, "gates": ["copilot"]},
+    {"key": "OEE_APS", "name": "OEE & APS",
+     "description": "Availability × Performance × Quality plus advanced planning, plant-wise and asset-wise.",
+     "default": True, "gates": ["oee", "aps"]},
+    {"key": "SMART_INVENTORY", "name": "Smart Inventory & Material Handling",
+     "description": "Coming soon — spares, consumables and material flow intelligence.",
+     "default": False, "gates": ["inventory"]},
+    {"key": "TQC", "name": "TQC – Traceability, Quality & Carbon Intelligence",
+     "description": "Coming soon — batch traceability, quality analytics and carbon emission tracking.",
+     "default": False, "gates": ["tqc"]},
+    {"key": "DIGITAL_WORKFORCE", "name": "Digital Workforce",
+     "description": "Coming soon — shift, skill and workforce productivity intelligence.",
+     "default": False, "gates": ["workforce"]},
+    {"key": "FINANCIAL_INTELLIGENCE", "name": "Financial Intelligence",
+     "description": "Coming soon — cost, margin and capex/opex analytics tied to plant operations.",
+     "default": False, "gates": ["finance"]},
     {"key": "REPORTS", "name": "Reports & Forecasting",
      "description": "Production, energy, OEE, downtime — CSV/Excel/PDF exports.",
      "default": True, "gates": ["reports"]},
@@ -81,7 +92,6 @@ MODULE_CATALOG: List[Dict[str, Any]] = [
      "description": "Fire alarms, zones, hydrants, sprinklers, fire pumps, fire-water tanks and hooter monitoring.",
      "default": False, "gates": ["fire_safety"]},
 ]
-
 
 async def get_tenant_modules(tenant_id: str) -> Dict[str, bool]:
     doc = await db.tenant_modules.find_one({"tenant_id": tenant_id}, {"_id": 0})
@@ -94,10 +104,9 @@ async def get_tenant_modules(tenant_id: str) -> Dict[str, bool]:
 
 def require_module(module_key: str):
     async def _dep(user: "User" = Depends(get_current_user)) -> "User":
-        modules = await get_tenant_modules(user.tenant_id)
+        modules = await get_effective_modules(user)
         if not modules.get(module_key, False):
-            raise HTTPException(status_code=403,
-                                detail=f"Module {module_key} is disabled for this tenant")
+            raise HTTPException(status_code=403, detail=f"Module {module_key} is disabled for this tenant")
         return user
     return _dep
 
@@ -133,6 +142,34 @@ oauth2 = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
 # Models
 # ---------------------------------------------------------------------------
 
+class UserCreate(BaseModel):
+    email: EmailStr
+    name: str
+    role: str
+    password: str
+    employee_id: Optional[str] = None
+    assigned_asset_id: Optional[str] = None
+    allowed_modules: Optional[List[str]] = None  # omit or null = unrestricted
+
+
+class UserUpdate(BaseModel):
+    name: Optional[str] = None
+    role: Optional[str] = None
+    employee_id: Optional[str] = None
+    active: Optional[bool] = None
+    password: Optional[str] = None
+    allowed_modules: Optional[List[str]] = None
+    clear_module_restriction: bool = False  # explicit flag to reset back to "unrestricted"
+
+class PQIMain(BaseModel):
+    id: str
+    tenant_id: str
+    plant_id: str
+    name: str
+    rated_voltage: float = 415.0
+    rated_current: Optional[float] = None
+    status: str = "NORMAL"  # NORMAL | WARNING | CRITICAL | OFFLINE
+
 
 class Tenant(BaseModel):
     id: str
@@ -145,11 +182,12 @@ class User(BaseModel):
     tenant_id: str
     email: EmailStr
     name: str
-    role: str  # TENANT_ADMIN | CXO | PRODUCTION_MANAGER | SUPERVISOR | OPERATOR
+    role: str
     employee_id: Optional[str] = None
     plants: List[str] = []
     active: bool = True
     assigned_asset_id: Optional[str] = None
+    allowed_modules: Optional[List[str]] = None  # None/empty = unrestricted (sees every module the tenant has enabled)
 
 
 class LoginRequest(BaseModel):
@@ -487,6 +525,13 @@ ASSET_TYPES = {
 
 STATUS_POOL = ["RUNNING"] * 6 + ["IDLE"] * 2 + ["FAULT"] + ["OFFLINE"]
 
+async def get_effective_modules(user: "User") -> Dict[str, bool]:
+    """A module is visible to this user only if BOTH the tenant has it
+    enabled AND (the user has no restriction list, or the module is in it)."""
+    tenant_mods = await get_tenant_modules(user.tenant_id)
+    if not user.allowed_modules:  # None or [] => no restriction, sees everything the tenant has
+        return tenant_mods
+    return {k: (v and k in user.allowed_modules) for k, v in tenant_mods.items()}
 
 async def seed_database() -> None:
     if await db.tenants.count_documents({}) > 0:
@@ -822,8 +867,7 @@ async def seed_database() -> None:
 
     logger.info("Seed complete.")
 
-
-# ---------------------------------------------------------------------------
+#-------------------------------------------------------------
 # Live telemetry simulator (for CNC-DEMO-01)
 # ---------------------------------------------------------------------------
 
@@ -1067,7 +1111,36 @@ api = APIRouter(prefix="/api")
 # Auth routes
 # ---------------------------------------------------------------------------
 
+@api.get("/assets/predictive-overview")
+async def assets_predictive_overview(user: User = Depends(require_module("APM"))):
+    """Fleet-wide predictive maintenance summary: upcoming service due dates
+    and highest-risk assets (lowest health + most failures), for the
+    Predictive Maintenance Overview page."""
+    assets = await db.assets.find({"tenant_id": user.tenant_id}, {"_id": 0}).to_list(2000)
+    all_metrics = [await _compute_asset_metrics(user.tenant_id, a) for a in assets]
 
+    upcoming = sorted(
+        [m for m in all_metrics if m.get("next_maintenance")],
+        key=lambda m: m["next_maintenance"]["next_due_at"],
+    )[:15]
+    high_risk = sorted(all_metrics, key=lambda m: (m["health"], -m["failure_count"]))[:15]
+
+    avg_mtbf = round(sum(m["mtbf_hours"] for m in all_metrics) / len(all_metrics), 1) if all_metrics else 0
+    avg_mttr = round(sum(m["mttr_hours"] for m in all_metrics) / len(all_metrics), 1) if all_metrics else 0
+
+    return {
+        "kpis": {
+            "total_assets": len(all_metrics),
+            "avg_mtbf_hours": avg_mtbf,
+            "avg_mttr_hours": avg_mttr,
+            "upcoming_count": len(upcoming),
+            "high_risk_count": sum(1 for m in all_metrics if m["health"] < 55),
+        },
+        "upcoming_maintenance": upcoming,
+        "high_risk_assets": high_risk,
+        "all_assets": all_metrics,
+    }
+# --------------
 @api.post("/auth/login", response_model=LoginResponse)
 async def login(req: LoginRequest):
     tenant = await db.tenants.find_one({"code": req.tenant_code.upper()}, {"_id": 0})
@@ -1081,8 +1154,9 @@ async def login(req: LoginRequest):
     token = create_token(user_doc["id"], tenant["id"])
     user_doc.pop("password", None)
     user_doc.pop("_id", None)
-    modules = await get_tenant_modules(tenant["id"])
-    return LoginResponse(access_token=token, user=User(**user_doc), tenant=Tenant(**tenant), modules=modules)
+    logged_in_user = User(**user_doc)
+    modules = await get_effective_modules(logged_in_user)
+    return LoginResponse(access_token=token, user=logged_in_user, tenant=Tenant(**tenant), modules=modules)
 
 
 @api.get("/auth/me", response_model=User)
@@ -1710,7 +1784,143 @@ async def compare_assets(user: User = Depends(require_module("APM")),
         history.reverse()
         out.append({**metrics, "history": history, "location": a.get("location")})
     return out
+class SolarArray(BaseModel):
+    id: str
+    tenant_id: str
+    plant_id: str
+    name: str
+    capacity_kwp: float
+    status: str = "NORMAL"  # NORMAL | WARNING | FAULT | OFFLINE
+    last_seen: Optional[str] = None
 
+
+class BessUnit(BaseModel):
+    id: str
+    tenant_id: str
+    plant_id: str
+    name: str
+    capacity_kwh: float
+    rated_power_kw: float
+    status: str = "NORMAL"
+    soc_pct: float = 50.0
+    soh_pct: float = 100.0
+    mode: str = "IDLE"  # CHARGE | DISCHARGE | IDLE
+    last_seen: Optional[str] = None
+
+
+class EvStation(BaseModel):
+    id: str
+    tenant_id: str
+    plant_id: str
+    name: str
+    connectors_total: int = 2
+    connectors_active: int = 0
+    status: str = "NORMAL"
+    power_kw: float = 0.0
+    last_seen: Optional[str] = None
+
+
+class DgSet(BaseModel):
+    id: str
+    tenant_id: str
+    plant_id: str
+    name: str
+    rated_kva: float
+    status: str = "STOPPED"  # RUNNING | STOPPED | FAULT
+    sync_status: str = "NOT_SYNCED"  # SYNCED | NOT_SYNCED
+    load_kw: float = 0.0
+    last_seen: Optional[str] = None
+
+    # ---------------------------------------------------------------------------
+# DERMS - Distributed Energy Resource Management (sub-module of EEMS)
+# ---------------------------------------------------------------------------
+
+@api.get("/derms/summary")
+async def derms_summary(user: User = Depends(require_module("EEMS")), plant_id: Optional[str] = None):
+    q: Dict[str, Any] = {"tenant_id": user.tenant_id}
+    if plant_id and plant_id != "all":
+        q["plant_id"] = plant_id
+
+    solar = await db.solar_arrays.find(q, {"_id": 0}).to_list(200)
+    bess = await db.bess_units.find(q, {"_id": 0}).to_list(200)
+    ev = await db.ev_stations.find(q, {"_id": 0}).to_list(200)
+    dg = await db.dg_sets.find(q, {"_id": 0}).to_list(200)
+    open_events = await db.derms_events.find(
+        {**q, "status": {"$ne": "RESOLVED"}}, {"_id": 0}
+    ).sort("started_at", -1).to_list(200)
+
+    solar_latest = {}
+    for s in solar:
+        r = await db.solar_readings.find_one({"array_id": s["id"]}, {"_id": 0}, sort=[("ts", -1)])
+        solar_latest[s["id"]] = r or {}
+    bess_latest = {}
+    for b in bess:
+        r = await db.bess_readings.find_one({"unit_id": b["id"]}, {"_id": 0}, sort=[("ts", -1)])
+        bess_latest[b["id"]] = r or {}
+
+    total_solar_gen = round(sum(solar_latest[s["id"]].get("generation_kw", 0) for s in solar), 1)
+    avg_pr = round(sum(solar_latest[s["id"]].get("pr_pct", 0) for s in solar) / len(solar), 1) if solar else 0
+    avg_soc = round(sum(bess_latest[b["id"]].get("soc_pct", b["soc_pct"]) for b in bess) / len(bess), 1) if bess else 0
+    total_bess_power = round(sum(bess_latest[b["id"]].get("power_kw", 0) for b in bess), 1)
+    ev_active = sum(s["connectors_active"] for s in ev)
+    ev_total = sum(s["connectors_total"] for s in ev)
+    dg_synced = sum(1 for d in dg if d["sync_status"] == "SYNCED")
+
+    return {
+        "kpis": {
+            "solar_generation_kw": total_solar_gen,
+            "solar_avg_pr_pct": avg_pr,
+            "bess_avg_soc_pct": avg_soc,
+            "bess_power_kw": total_bess_power,
+            "ev_connectors_active": f"{ev_active}/{ev_total}",
+            "dg_synced": f"{dg_synced}/{len(dg)}",
+            "active_events": len(open_events),
+        },
+        "solar": [{**s, "latest": solar_latest[s["id"]]} for s in solar],
+        "bess": [{**b, "latest": bess_latest[b["id"]]} for b in bess],
+        "ev_stations": ev,
+        "dg_sets": dg,
+        "recent_events": open_events[:10],
+    }
+
+
+@api.get("/derms/solar/{array_id}/history")
+async def solar_history(array_id: str, user: User = Depends(require_module("EEMS")), limit: int = 60):
+    return list(reversed(await db.solar_readings.find(
+        {"array_id": array_id, "tenant_id": user.tenant_id}, {"_id": 0}
+    ).sort("ts", -1).to_list(limit)))
+
+
+@api.get("/derms/bess/{unit_id}/history")
+async def bess_history(unit_id: str, user: User = Depends(require_module("EEMS")), limit: int = 60):
+    return list(reversed(await db.bess_readings.find(
+        {"unit_id": unit_id, "tenant_id": user.tenant_id}, {"_id": 0}
+    ).sort("ts", -1).to_list(limit)))
+
+
+@api.get("/derms/events")
+async def list_derms_events(user: User = Depends(require_module("EEMS")),
+                             status: Optional[str] = None, source_type: Optional[str] = None, limit: int = 100):
+    q: Dict[str, Any] = {"tenant_id": user.tenant_id}
+    if status:
+        q["status"] = status.upper()
+    if source_type:
+        q["source_type"] = source_type.upper()
+    return await db.derms_events.find(q, {"_id": 0}).sort("started_at", -1).to_list(limit)
+
+
+@api.post("/derms/events/{event_id}/acknowledge")
+async def acknowledge_derms_event(event_id: str, user: User = Depends(require_module("EEMS"))):
+    res = await db.derms_events.update_one(
+        {"id": event_id, "tenant_id": user.tenant_id},
+        {"$set": {"status": "ACKNOWLEDGED", "acknowledged": True,
+                   "acknowledged_by": user.email,
+                   "acknowledged_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="DERMS event not found")
+    await record_audit(user, "derms_event.ack", "derms_event", event_id, {})
+    return {"ok": True}
 
 # ---------------------------------------------------------------------------
 # Audit logging
@@ -1758,6 +1968,284 @@ async def list_audit_logs(user: User = Depends(get_current_user),
     rows = await db.audit_logs.find(query, {"_id": 0}).sort("created_at", -1).to_list(limit)
     return rows
 
+
+
+class UmsAsset(BaseModel):
+    id: str
+    tenant_id: str
+    plant_id: str
+    utility_type: str  # WATER | AIR | GAS | OIL_FUEL | STEAM
+    asset_code: str
+    name: str
+    status: str = "RUNNING"  # RUNNING | IDLE | FAULT | OFFLINE
+    health: int = 100
+    flow_rate: Optional[float] = None
+    unit: str = "m3/h"
+    pressure: Optional[float] = None
+    consumption_today: float = 0.0
+    last_seen: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# UMS - Utility Management System (sub-module of EEMS)
+# ---------------------------------------------------------------------------
+
+UTILITY_TYPES = ["WATER", "AIR", "GAS", "OIL_FUEL", "STEAM"]
+
+
+@api.get("/ums/summary")
+async def ums_summary(user: User = Depends(require_module("EEMS")), plant_id: Optional[str] = None):
+    q: Dict[str, Any] = {"tenant_id": user.tenant_id}
+    if plant_id and plant_id != "all":
+        q["plant_id"] = plant_id
+
+    assets = await db.ums_assets.find(q, {"_id": 0}).to_list(500)
+    open_alarms = await db.ums_alarms.find({**q, "acknowledged": False}, {"_id": 0}).sort("created_at", -1).to_list(200)
+
+    by_type = {}
+    for t in UTILITY_TYPES:
+        t_assets = [a for a in assets if a["utility_type"] == t]
+        n = len(t_assets) or 1
+        by_type[t] = {
+            "utility_type": t,
+            "asset_count": len(t_assets),
+            "running": sum(1 for a in t_assets if a["status"] == "RUNNING"),
+            "fault": sum(1 for a in t_assets if a["status"] == "FAULT"),
+            "avg_health": round(sum(a["health"] for a in t_assets) / n, 1) if t_assets else 0,
+            "total_consumption_today": round(sum(a["consumption_today"] for a in t_assets), 1),
+        }
+
+    return {
+        "kpis": {
+            "total_assets": len(assets),
+            "active_alarms": len(open_alarms),
+            "critical_alarms": sum(1 for a in open_alarms if a["severity"] == "CRITICAL"),
+        },
+        "by_type": by_type,
+        "assets": assets,
+        "recent_alarms": open_alarms[:10],
+    }
+
+
+@api.get("/ums/assets")
+async def list_ums_assets(user: User = Depends(require_module("EEMS")),
+                           utility_type: Optional[str] = None, plant_id: Optional[str] = None):
+    q: Dict[str, Any] = {"tenant_id": user.tenant_id}
+    if utility_type and utility_type != "all":
+        q["utility_type"] = utility_type.upper()
+    if plant_id and plant_id != "all":
+        q["plant_id"] = plant_id
+    return await db.ums_assets.find(q, {"_id": 0}).to_list(500)
+
+
+@api.get("/ums/assets/{asset_id}/history")
+async def ums_asset_history(asset_id: str, user: User = Depends(require_module("EEMS")), limit: int = 60):
+    return list(reversed(await db.ums_readings.find(
+        {"asset_id": asset_id, "tenant_id": user.tenant_id}, {"_id": 0}
+    ).sort("ts", -1).to_list(limit)))
+
+
+@api.get("/ums/alarms")
+async def list_ums_alarms(user: User = Depends(require_module("EEMS")),
+                           severity: Optional[str] = None, acknowledged: Optional[bool] = None, limit: int = 100):
+    q: Dict[str, Any] = {"tenant_id": user.tenant_id}
+    if severity:
+        q["severity"] = severity.upper()
+    if acknowledged is not None:
+        q["acknowledged"] = acknowledged
+    return await db.ums_alarms.find(q, {"_id": 0}).sort("created_at", -1).to_list(limit)
+
+
+@api.post("/ums/alarms/{alarm_id}/acknowledge")
+async def acknowledge_ums_alarm(alarm_id: str, user: User = Depends(require_module("EEMS"))):
+    res = await db.ums_alarms.update_one(
+        {"id": alarm_id, "tenant_id": user.tenant_id},
+        {"$set": {"acknowledged": True, "acknowledged_by": user.email,
+                   "acknowledged_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="UMS alarm not found")
+    await record_audit(user, "ums_alarm.ack", "ums_alarm", alarm_id, {})
+    return {"ok": True}    
+
+
+
+# ---------------------------------------------------------------------------
+# Smart Inventory & Material Handling
+# ---------------------------------------------------------------------------
+
+class InventoryItem(BaseModel):
+    id: str
+    tenant_id: str
+    plant_id: str
+    sku: str
+    name: str
+    category: str  # SPARES | CONSUMABLES | RAW_MATERIAL | TOOLS
+    uom: str = "PCS"
+    qty_on_hand: float
+    reorder_point: float
+    max_stock: float
+    unit_cost: float = 0.0
+    location: str = "-"
+    status: str = "OK"  # OK | LOW | CRITICAL | OVERSTOCK
+
+
+@api.get("/inventory/summary")
+async def inventory_summary(user: User = Depends(require_module("SMART_INVENTORY")), plant_id: Optional[str] = None):
+    q: Dict[str, Any] = {"tenant_id": user.tenant_id}
+    if plant_id and plant_id != "all":
+        q["plant_id"] = plant_id
+    items = await db.inventory_items.find(q, {"_id": 0}).to_list(1000)
+    movements = await db.inventory_movements.find(q, {"_id": 0}).sort("ts", -1).to_list(20)
+    total_value = round(sum(i["qty_on_hand"] * i["unit_cost"] for i in items), 0)
+    return {
+        "kpis": {
+            "total_items": len(items),
+            "low_stock": sum(1 for i in items if i["status"] == "LOW"),
+            "critical": sum(1 for i in items if i["status"] == "CRITICAL"),
+            "total_value_inr": total_value,
+        },
+        "items": items,
+        "recent_movements": movements,
+    }
+
+
+@api.get("/inventory/items")
+async def list_inventory_items(user: User = Depends(require_module("SMART_INVENTORY")),
+                                category: Optional[str] = None, status: Optional[str] = None):
+    q: Dict[str, Any] = {"tenant_id": user.tenant_id}
+    if category and category != "all":
+        q["category"] = category.upper()
+    if status and status != "all":
+        q["status"] = status.upper()
+    return await db.inventory_items.find(q, {"_id": 0}).to_list(1000)
+
+
+@api.get("/inventory/items/{item_id}/movements")
+async def item_movements(item_id: str, user: User = Depends(require_module("SMART_INVENTORY")), limit: int = 50):
+    return await db.inventory_movements.find(
+        {"item_id": item_id, "tenant_id": user.tenant_id}, {"_id": 0}
+    ).sort("ts", -1).to_list(limit)
+
+
+# ---------------------------------------------------------------------------
+# TQC - Traceability, Quality Intelligence, Carbon Emission Intelligence
+# ---------------------------------------------------------------------------
+
+@api.get("/tqc/summary")
+async def tqc_summary(user: User = Depends(require_module("TQC")), plant_id: Optional[str] = None, days: int = 14):
+    q: Dict[str, Any] = {"tenant_id": user.tenant_id}
+    if plant_id and plant_id != "all":
+        q["plant_id"] = plant_id
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    batches = await db.quality_batches.find({**q, "produced_at": {"$gte": cutoff}}, {"_id": 0}).sort("produced_at", -1).to_list(500)
+    carbon = await db.carbon_records.find(q, {"_id": 0}).sort("date", -1).to_list(30)
+
+    avg_defect = round(sum(b["defect_rate_pct"] for b in batches) / len(batches), 2) if batches else 0
+    total_carbon = round(sum(c["total_kg"] for c in carbon), 0)
+    fail_count = sum(1 for b in batches if b["status"] == "FAIL")
+
+    return {
+        "kpis": {
+            "batches": len(batches),
+            "avg_defect_rate_pct": avg_defect,
+            "failed_batches": fail_count,
+            "total_carbon_kg_30d": total_carbon,
+        },
+        "batches": batches[:50],
+        "carbon_trend": list(reversed(carbon)),
+    }
+
+
+@api.get("/tqc/batches")
+async def list_quality_batches(user: User = Depends(require_module("TQC")), status: Optional[str] = None, limit: int = 100):
+    q: Dict[str, Any] = {"tenant_id": user.tenant_id}
+    if status and status != "all":
+        q["status"] = status.upper()
+    return await db.quality_batches.find(q, {"_id": 0}).sort("produced_at", -1).to_list(limit)
+
+
+@api.get("/tqc/carbon")
+async def list_carbon_records(user: User = Depends(require_module("TQC")), days: int = 30):
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).date().isoformat()
+    rows = await db.carbon_records.find(
+        {"tenant_id": user.tenant_id, "date": {"$gte": cutoff}}, {"_id": 0}
+    ).sort("date", 1).to_list(200)
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# Digital Workforce
+# ---------------------------------------------------------------------------
+
+@api.get("/workforce/summary")
+async def workforce_summary(user: User = Depends(require_module("DIGITAL_WORKFORCE")), plant_id: Optional[str] = None):
+    q: Dict[str, Any] = {"tenant_id": user.tenant_id}
+    if plant_id and plant_id != "all":
+        q["plant_id"] = plant_id
+    shifts = await db.workforce_shifts.find(q, {"_id": 0}).to_list(50)
+    logs = await db.workforce_logs.find(q, {"_id": 0}).sort("clock_in", -1).to_list(200)
+
+    planned = sum(s["headcount_planned"] for s in shifts) or 1
+    present = sum(s["headcount_present"] for s in shifts)
+    avg_productivity = round(sum(l["productivity_score"] for l in logs) / len(logs), 1) if logs else 0
+
+    return {
+        "kpis": {
+            "headcount_planned": planned,
+            "headcount_present": present,
+            "attendance_pct": round(present * 100 / planned, 1),
+            "avg_productivity": avg_productivity,
+        },
+        "shifts": shifts,
+        "recent_logs": logs[:30],
+    }
+
+
+@api.get("/workforce/shifts")
+async def list_shifts(user: User = Depends(require_module("DIGITAL_WORKFORCE"))):
+    return await db.workforce_shifts.find({"tenant_id": user.tenant_id}, {"_id": 0}).to_list(50)
+
+
+@api.get("/workforce/logs")
+async def list_workforce_logs(user: User = Depends(require_module("DIGITAL_WORKFORCE")), limit: int = 100):
+    return await db.workforce_logs.find({"tenant_id": user.tenant_id}, {"_id": 0}).sort("clock_in", -1).to_list(limit)
+
+
+# ---------------------------------------------------------------------------
+# Financial Intelligence
+# ---------------------------------------------------------------------------
+
+@api.get("/finance/summary")
+async def finance_summary(user: User = Depends(require_module("FINANCIAL_INTELLIGENCE")), plant_id: Optional[str] = None):
+    q: Dict[str, Any] = {"tenant_id": user.tenant_id}
+    if plant_id and plant_id != "all":
+        q["plant_id"] = plant_id
+    records = await db.financial_records.find(q, {"_id": 0}).sort("month", 1).to_list(24)
+
+    total_revenue = round(sum(r["revenue_inr"] for r in records), 0)
+    total_cost = round(sum(r["cost_inr"] for r in records), 0)
+    avg_margin = round(sum(r["margin_pct"] for r in records) / len(records), 1) if records else 0
+
+    breakdown = {"LABOR": 0, "MATERIAL": 0, "ENERGY": 0, "MAINTENANCE": 0, "OVERHEAD": 0}
+    for r in records:
+        for k, v in r.get("category_breakdown", {}).items():
+            breakdown[k.upper()] = breakdown.get(k.upper(), 0) + v
+
+    return {
+        "kpis": {
+            "total_revenue_inr": total_revenue,
+            "total_cost_inr": total_cost,
+            "avg_margin_pct": avg_margin,
+        },
+        "monthly": records,
+        "cost_breakdown": [{"category": k, "amount_inr": round(v, 0)} for k, v in breakdown.items()],
+    }
+
+
+@api.get("/finance/records")
+async def list_financial_records(user: User = Depends(require_module("FINANCIAL_INTELLIGENCE"))):
+    return await db.financial_records.find({"tenant_id": user.tenant_id}, {"_id": 0}).sort("month", 1).to_list(24)
 
 # ---------------------------------------------------------------------------
 # Users CRUD (Tenant Admin) + full editing
@@ -1823,6 +2311,10 @@ async def update_user(user_id: str, payload: UserUpdate, user: User = Depends(ge
             update[k] = v
     if payload.password:
         update["password"] = hash_password(payload.password)
+    if payload.clear_module_restriction:
+        update["allowed_modules"] = None
+    elif payload.allowed_modules is not None:
+        update["allowed_modules"] = payload.allowed_modules
     if not update:
         raise HTTPException(status_code=400, detail="No fields to update")
     await db.users.update_one({"id": user_id, "tenant_id": user.tenant_id}, {"$set": update})
@@ -1879,7 +2371,12 @@ async def platform_list_tenants(user: User = Depends(require_super_admin)):
         users_ct = await db.users.count_documents({"tenant_id": t["id"]})
         assets_ct = await db.assets.count_documents({"tenant_id": t["id"]})
         plants_ct = await db.plants.count_documents({"tenant_id": t["id"]})
-        out.append({**t, "users_count": users_ct, "assets_count": assets_ct, "plants_count": plants_ct})
+        tm = await db.tenant_modules.find_one({"tenant_id": t["id"]}, {"_id": 0, "modules": 1})
+        mods = (tm or {}).get("modules", {})
+        template = "BOTH" if (mods.get("APM") and mods.get("FIRE_SAFETY")) else (
+            "FIRE_SAFETY" if mods.get("FIRE_SAFETY") else "APM"
+        )
+        out.append({**t, "users_count": users_ct, "assets_count": assets_ct, "plants_count": plants_ct, "template": template})
     return out
 
 
@@ -2176,6 +2673,83 @@ async def operator_submit_production(entry: ProductionEntry, user: User = Depend
 # Escalations
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# PQI - Power Quality Intelligence (sub-module of EEMS)
+# ---------------------------------------------------------------------------
+
+@api.get("/pqi/summary")
+async def pqi_summary(user: User = Depends(require_module("EEMS")), plant_id: Optional[str] = None):
+    q: Dict[str, Any] = {"tenant_id": user.tenant_id}
+    if plant_id and plant_id != "all":
+        q["plant_id"] = plant_id
+
+    mains = await db.pqi_mains.find(q, {"_id": 0}).to_list(200)
+    latest_by_main: Dict[str, Dict[str, Any]] = {}
+    for m in mains:
+        r = await db.pqi_readings.find_one({"main_id": m["id"]}, {"_id": 0}, sort=[("ts", -1)])
+        latest_by_main[m["id"]] = r or {}
+
+    open_events = await db.pqi_events.find(
+        {**q, "status": {"$ne": "RESOLVED"}}, {"_id": 0}
+    ).sort("started_at", -1).to_list(200)
+
+    n = len(mains) or 1
+    avg_pf = round(sum(latest_by_main[m["id"]].get("power_factor", 1) for m in mains) / n, 3) if mains else 0
+    avg_thd_v = round(sum(latest_by_main[m["id"]].get("thd_voltage_pct", 0) for m in mains) / n, 2) if mains else 0
+    avg_thd_i = round(sum(latest_by_main[m["id"]].get("thd_current_pct", 0) for m in mains) / n, 2) if mains else 0
+    critical_events = sum(1 for e in open_events if e["severity"] == "CRITICAL")
+
+    mains_out = [{**m, "latest": latest_by_main[m["id"]]} for m in mains]
+
+    return {
+        "kpis": {
+            "avg_power_factor": avg_pf,
+            "avg_thd_voltage_pct": avg_thd_v,
+            "avg_thd_current_pct": avg_thd_i,
+            "active_events": len(open_events),
+            "critical_events": critical_events,
+            "mains_count": len(mains),
+        },
+        "mains": mains_out,
+        "recent_events": open_events[:10],
+    }
+
+
+@api.get("/pqi/mains")
+async def list_pqi_mains(user: User = Depends(require_module("EEMS"))):
+    return await db.pqi_mains.find({"tenant_id": user.tenant_id}, {"_id": 0}).to_list(200)
+
+
+@api.get("/pqi/mains/{main_id}/history")
+async def pqi_main_history(main_id: str, user: User = Depends(require_module("EEMS")), limit: int = 60):
+    return list(reversed(await db.pqi_readings.find(
+        {"main_id": main_id, "tenant_id": user.tenant_id}, {"_id": 0}
+    ).sort("ts", -1).to_list(limit)))
+
+
+@api.get("/pqi/events")
+async def list_pqi_events(user: User = Depends(require_module("EEMS")),
+                           status: Optional[str] = None, severity: Optional[str] = None, limit: int = 100):
+    q: Dict[str, Any] = {"tenant_id": user.tenant_id}
+    if status:
+        q["status"] = status.upper()
+    if severity:
+        q["severity"] = severity.upper()
+    return await db.pqi_events.find(q, {"_id": 0}).sort("started_at", -1).to_list(limit)
+
+
+@api.post("/pqi/events/{event_id}/acknowledge")
+async def acknowledge_pqi_event(event_id: str, user: User = Depends(require_module("EEMS"))):
+    res = await db.pqi_events.update_one(
+        {"id": event_id, "tenant_id": user.tenant_id},
+        {"$set": {"status": "ACKNOWLEDGED", "acknowledged": True,
+                   "acknowledged_by": user.email,
+                   "acknowledged_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="PQI event not found")
+    await record_audit(user, "pqi_event.ack", "pqi_event", event_id, {})
+    return {"ok": True}
 
 @api.get("/escalations")
 async def list_escalations(user: User = Depends(get_current_user), limit: int = 50):
@@ -2616,6 +3190,148 @@ async def _run_oee(tenant_id: str, req: ReportRunRequest, start: datetime, end: 
                       {"key": "pct", "label": "% of total"}]
     return {"kpis": kpis, "columns": columns, "rows": series,
             "detail_columns": detail_columns, "detail_rows": detail}
+
+
+class FireAsset(BaseModel):
+    id: str
+    tenant_id: str
+    plant_id: str
+    zone_id: Optional[str] = None
+    asset_code: str
+    name: str
+    asset_type: str  # HYDRANT | SPRINKLER_SYSTEM | FIRE_PUMP | FIRE_WATER_TANK | HOOTER
+    status: str = "NORMAL"  # NORMAL | ATTENTION | ALARM | FAULT | OFFLINE
+    health: int = 100
+    criticality: str = "HIGH"
+    last_seen: Optional[str] = None
+    metrics: Dict[str, Any] = {}  # type-specific latest reading, e.g. {"pressure_bar": 7.2} or {"level_pct": 82}
+
+
+FIRE_ASSET_TYPES = ["HYDRANT", "SPRINKLER_SYSTEM", "FIRE_PUMP", "FIRE_WATER_TANK", "HOOTER"]
+
+
+@api.get("/fire/assets")
+async def list_fire_assets(user: User = Depends(require_module("FIRE_SAFETY")),
+                            asset_type: Optional[str] = None, status: Optional[str] = None,
+                            plant_id: Optional[str] = None):
+    q: Dict[str, Any] = {"tenant_id": user.tenant_id}
+    if asset_type and asset_type != "all":
+        q["asset_type"] = asset_type.upper()
+    if status and status != "all":
+        q["status"] = status.upper()
+    if plant_id and plant_id != "all":
+        q["plant_id"] = plant_id
+    return await db.fire_assets.find(q, {"_id": 0}).to_list(500)
+
+
+# --- Literal sub-paths MUST come before /fire/assets/{asset_id} ---
+# FastAPI matches routes in declaration order, so a generic {asset_id}
+# route declared first would swallow "status-overview" etc. as if it
+# were an asset ID and always 404 (no asset literally has that id).
+
+@api.get("/fire/assets/status-overview")
+async def fire_assets_status_overview(user: User = Depends(require_module("FIRE_SAFETY")), plant_id: Optional[str] = None):
+    q: Dict[str, Any] = {"tenant_id": user.tenant_id}
+    if plant_id and plant_id != "all":
+        q["plant_id"] = plant_id
+    assets = await db.fire_assets.find(q, {"_id": 0}).to_list(500)
+    by_status = {"NORMAL": 0, "ATTENTION": 0, "ALARM": 0, "FAULT": 0, "OFFLINE": 0}
+    for a in assets:
+        by_status[a.get("status", "OFFLINE")] = by_status.get(a.get("status", "OFFLINE"), 0) + 1
+    by_type = {}
+    for t in FIRE_ASSET_TYPES:
+        t_assets = [a for a in assets if a["asset_type"] == t]
+        by_type[t] = {"count": len(t_assets), "healthy": sum(1 for a in t_assets if a["status"] == "NORMAL")}
+    return {"total": len(assets), "by_status": by_status, "by_type": by_type, "assets": assets}
+
+
+@api.get("/fire/assets/health-overview")
+async def fire_assets_health_overview(user: User = Depends(require_module("FIRE_SAFETY")), plant_id: Optional[str] = None):
+    q: Dict[str, Any] = {"tenant_id": user.tenant_id}
+    if plant_id and plant_id != "all":
+        q["plant_id"] = plant_id
+    assets = await db.fire_assets.find(q, {"_id": 0}).to_list(500)
+    healthy = sum(1 for a in assets if a["health"] >= 80)
+    warning = sum(1 for a in assets if 55 <= a["health"] < 80)
+    critical = sum(1 for a in assets if a["health"] < 55)
+    avg = round(sum(a["health"] for a in assets) / len(assets), 1) if assets else 0
+    worst = sorted(assets, key=lambda a: a["health"])[:15]
+    return {"health_overview": {"healthy": healthy, "warning": warning, "critical": critical, "average": avg},
+            "worst_assets": worst}
+
+@api.get("/fire/assets/compare")
+async def compare_fire_assets(user: User = Depends(require_module("FIRE_SAFETY")),
+                               ids: str = Query(..., description="Comma-separated fire asset ids, up to 4"),
+                               history_limit: int = 60):
+    id_list = [x.strip() for x in ids.split(",") if x.strip()]
+    if not id_list:
+        raise HTTPException(status_code=400, detail="Provide at least one asset id")
+    if len(id_list) > 4:
+        raise HTTPException(status_code=400, detail="Compare up to 4 assets")
+    out = []
+    for aid in id_list:
+        a = await db.fire_assets.find_one({"id": aid, "tenant_id": user.tenant_id}, {"_id": 0})
+        if not a:
+            continue
+        history = await db.fire_asset_readings.find(
+            {"asset_id": aid, "tenant_id": user.tenant_id}, {"_id": 0}
+        ).sort("ts", -1).to_list(history_limit)
+        history.reverse()
+        mnt_count = await db.maintenance_records.count_documents({"tenant_id": user.tenant_id, "asset_id": aid})
+        out.append({**a, "history": history, "maintenance_count": mnt_count})
+    return out
+
+@api.get("/fire/assets/predictive-overview")
+async def fire_assets_predictive_overview(user: User = Depends(require_module("FIRE_SAFETY"))):
+    assets = await db.fire_assets.find({"tenant_id": user.tenant_id}, {"_id": 0}).to_list(500)
+    out = []
+    for a in assets:
+        mnts = await db.maintenance_records.find(
+            {"tenant_id": user.tenant_id, "asset_id": a["id"]}, {"_id": 0}
+        ).sort("performed_at", -1).to_list(50)
+        upcoming = [m for m in mnts if m.get("next_due_at") and m["next_due_at"] > datetime.now(timezone.utc).isoformat()]
+        upcoming.sort(key=lambda m: m["next_due_at"])
+        out.append({
+            "asset_id": a["id"], "asset_code": a["asset_code"], "name": a["name"],
+            "asset_type": a["asset_type"], "health": a["health"], "status": a["status"],
+            "maintenance_count": len(mnts),
+            "next_maintenance": upcoming[0] if upcoming else None,
+        })
+    upcoming_all = sorted([m for m in out if m["next_maintenance"]], key=lambda m: m["next_maintenance"]["next_due_at"])[:15]
+    high_risk = sorted(out, key=lambda m: m["health"])[:15]
+    return {
+        "kpis": {
+            "total_assets": len(out),
+            "upcoming_count": len(upcoming_all),
+            "high_risk_count": sum(1 for m in out if m["health"] < 55),
+        },
+        "upcoming_maintenance": upcoming_all,
+        "high_risk_assets": high_risk,
+    }
+
+
+# --- Dynamic {asset_id} routes come AFTER the literal ones above ---
+
+@api.get("/fire/assets/{asset_id}")
+async def get_fire_asset(asset_id: str, user: User = Depends(require_module("FIRE_SAFETY"))):
+    a = await db.fire_assets.find_one({"id": asset_id, "tenant_id": user.tenant_id}, {"_id": 0})
+    if not a:
+        raise HTTPException(status_code=404, detail="Fire asset not found")
+    return a
+
+
+@api.get("/fire/assets/{asset_id}/history")
+async def fire_asset_history(asset_id: str, user: User = Depends(require_module("FIRE_SAFETY")), limit: int = 60):
+    return list(reversed(await db.fire_asset_readings.find(
+        {"asset_id": asset_id, "tenant_id": user.tenant_id}, {"_id": 0}
+    ).sort("ts", -1).to_list(limit)))
+
+
+@api.get("/fire/assets/{asset_id}/maintenance")
+async def fire_asset_maintenance(asset_id: str, user: User = Depends(require_module("FIRE_SAFETY"))):
+    return await db.maintenance_records.find(
+        {"tenant_id": user.tenant_id, "asset_id": asset_id}, {"_id": 0}
+    ).sort("performed_at", -1).to_list(100)
 
 
 _REPORT_RUNNERS = {
