@@ -77,6 +77,9 @@ MODULE_CATALOG: List[Dict[str, Any]] = [
     {"key": "AUDIT", "name": "Audit & Compliance",
      "description": "Every config change, ack and login — searchable and exportable.",
      "default": True, "gates": ["audit"]},
+    {"key": "FIRE_SAFETY", "name": "Fire & Safety Command Center",
+     "description": "Fire alarms, zones, hydrants, sprinklers, fire pumps, fire-water tanks and hooter monitoring.",
+     "default": False, "gates": ["fire_safety"]},
 ]
 
 
@@ -262,7 +265,91 @@ class TelemetryIn(BaseModel):
     alarm_message: Optional[str] = None
     timestamp: Optional[str] = None
 
+class FireZone(BaseModel):
+    id: str
+    tenant_id: str
+    plant_id: str
+    name: str
+    status: str = "NORMAL"  # NORMAL | ATTENTION | ALARM | OFFLINE
+    last_alarm_at: Optional[str] = None
 
+
+class FireAlarmEventCreate(BaseModel):
+    zone_id: str
+    event_type: str  # SMOKE_DETECTED | HEAT_DETECTED | MANUAL_CALL_POINT | PANEL_FAULT
+    severity: str = "CRITICAL"  # CRITICAL | HIGH | MEDIUM | LOW | INFO
+
+
+class Hydrant(BaseModel):
+    id: str
+    tenant_id: str
+    plant_id: str
+    name: str
+    pressure_bar: Optional[float] = None
+    status: str = "NORMAL"  # NORMAL | ATTENTION | ALARM | OFFLINE
+    warning_threshold: float = 6.0
+    critical_threshold: float = 4.0
+    last_seen: Optional[str] = None
+
+
+class SprinklerSystem(BaseModel):
+    id: str
+    tenant_id: str
+    plant_id: str
+    name: str
+    status: str = "READY"  # READY | RUNNING | FAULT | OFFLINE
+    zones_ready: int = 0
+    zones_total: int = 0
+    last_seen: Optional[str] = None
+
+
+class FirePump(BaseModel):
+    id: str
+    tenant_id: str
+    plant_id: str
+    name: str
+    pump_type: str  # JOCKEY | MAIN_ELECTRIC | DIESEL
+    status: str = "READY"  # RUNNING | READY | FAULT | OFFLINE
+    pressure_bar: Optional[float] = None
+    runtime_min_today: int = 0
+    last_start_at: Optional[str] = None
+    next_maintenance_due: Optional[str] = None
+
+
+class FireWaterTank(BaseModel):
+    id: str
+    tenant_id: str
+    plant_id: str
+    name: str
+    capacity_liters: float
+    current_level_pct: float
+    warning_threshold_pct: float = 40.0
+    critical_threshold_pct: float = 20.0
+    last_seen: Optional[str] = None
+
+
+class HooterEvent(BaseModel):
+    id: str
+    tenant_id: str
+    plant_id: str
+    name: str
+    state: str = "OFF"  # ON | OFF | TEST
+    activated_at: Optional[str] = None
+    duration_sec: Optional[int] = None
+    acknowledged: bool = False
+    incident_id: Optional[str] = None
+
+
+class SafetyIncidentCreate(BaseModel):
+    zone_id: Optional[str] = None
+    event: str
+    severity: str = "MEDIUM"
+    assigned_to: Optional[str] = None
+
+
+class SafetyIncidentUpdate(BaseModel):
+    status: Optional[str] = None  # OPEN | ACKNOWLEDGED | INVESTIGATING | RESOLVED | CLOSED
+    assigned_to: Optional[str] = None
 # ---------------------------------------------------------------------------
 # Auth helpers
 # ---------------------------------------------------------------------------
@@ -1796,31 +1883,7 @@ async def platform_list_tenants(user: User = Depends(require_super_admin)):
     return out
 
 
-@api.post("/platform/tenants")
-async def platform_create_tenant(payload: TenantCreate, user: User = Depends(require_super_admin)):
-    code = payload.code.upper().strip()
-    if await db.tenants.find_one({"code": code}):
-        raise HTTPException(status_code=409, detail="Tenant code already exists")
-    tid = str(uuid.uuid4())
-    await db.tenants.insert_one({"id": tid, "code": code, "name": payload.name})
-    admin_id = str(uuid.uuid4())
-    await db.users.insert_one({
-        "id": admin_id,
-        "tenant_id": tid,
-        "email": payload.admin_email.lower(),
-        "name": payload.admin_name,
-        "role": "TENANT_ADMIN",
-        "employee_id": None,
-        "plants": [],
-        "active": True,
-        "assigned_asset_id": None,
-        "password": hash_password(payload.admin_password),
-    })
-    # default modules
-    await get_tenant_modules(tid)
-    await record_audit(user, "tenant.create", "tenant", tid,
-                       {"code": code, "admin_email": payload.admin_email})
-    return {"id": tid, "code": code, "name": payload.name, "admin_id": admin_id}
+
 
 
 @api.delete("/platform/tenants/{tenant_id}")
@@ -2822,10 +2885,67 @@ async def reports_export(req: ReportRunRequest, user: User = Depends(require_mod
     raise HTTPException(status_code=400, detail="format must be csv, xlsx, pdf or json")
 
 
-class ReportTemplateSave(BaseModel):
-    name: str
-    request: ReportRunRequest
+TEMPLATE_MODULE_PRESETS: Dict[str, Dict[str, bool]] = {
+    "APM": {"APM": True, "EEMS": True, "DIGITAL_TWIN": True, "OEE_APS": True,
+            "AI_COPILOT": False, "REPORTS": True, "AUDIT": True, "FIRE_SAFETY": False},
+    "FIRE_SAFETY": {"APM": False, "EEMS": False, "DIGITAL_TWIN": False, "OEE_APS": False,
+                     "AI_COPILOT": False, "REPORTS": True, "AUDIT": True, "FIRE_SAFETY": True},
+    "BOTH": {"APM": True, "EEMS": True, "DIGITAL_TWIN": True, "OEE_APS": True,
+             "AI_COPILOT": False, "REPORTS": True, "AUDIT": True, "FIRE_SAFETY": True},
+}
 
+
+class TenantCreate(BaseModel):
+    code: str
+    name: str
+    admin_email: EmailStr
+    admin_name: str
+    admin_password: str
+    template: str = "APM"  # APM | FIRE_SAFETY | BOTH
+
+
+@api.get("/platform/templates")
+async def platform_list_templates(user: User = Depends(require_super_admin)):
+    """For the Super Admin 'Create Tenant' dropdown."""
+    return [
+        {"key": "APM", "label": "Asset Performance Management (Industrial)",
+         "modules": [k for k, v in TEMPLATE_MODULE_PRESETS["APM"].items() if v]},
+        {"key": "FIRE_SAFETY", "label": "Fire & Safety Command Center",
+         "modules": [k for k, v in TEMPLATE_MODULE_PRESETS["FIRE_SAFETY"].items() if v]},
+        {"key": "BOTH", "label": "Both (APM + Fire & Safety)",
+         "modules": [k for k, v in TEMPLATE_MODULE_PRESETS["BOTH"].items() if v]},
+    ]
+
+
+@api.post("/platform/tenants")
+async def platform_create_tenant(payload: TenantCreate, user: User = Depends(require_super_admin)):
+    code = payload.code.upper().strip()
+    if await db.tenants.find_one({"code": code}):
+        raise HTTPException(status_code=409, detail="Tenant code already exists")
+    template = payload.template.upper()
+    if template not in TEMPLATE_MODULE_PRESETS:
+        raise HTTPException(status_code=400, detail="template must be APM, FIRE_SAFETY or BOTH")
+
+    tid = str(uuid.uuid4())
+    await db.tenants.insert_one({"id": tid, "code": code, "name": payload.name})
+    admin_id = str(uuid.uuid4())
+    await db.users.insert_one({
+        "id": admin_id,
+        "tenant_id": tid,
+        "email": payload.admin_email.lower(),
+        "name": payload.admin_name,
+        "role": "TENANT_ADMIN",
+        "employee_id": None,
+        "plants": [],
+        "active": True,
+        "assigned_asset_id": None,
+        "password": hash_password(payload.admin_password),
+    })
+    # Set modules per the chosen template instead of the generic defaults
+    await db.tenant_modules.insert_one({"tenant_id": tid, "modules": TEMPLATE_MODULE_PRESETS[template]})
+    await record_audit(user, "tenant.create", "tenant", tid,
+                       {"code": code, "admin_email": payload.admin_email, "template": template})
+    return {"id": tid, "code": code, "name": payload.name, "admin_id": admin_id, "template": template}
 
 @api.get("/reports/templates")
 async def list_report_templates(user: User = Depends(require_module("REPORTS"))):
@@ -2865,7 +2985,207 @@ async def delete_report_template(template_id: str,
     await record_audit(user, "report.template.delete", "report_template", template_id)
     return {"ok": True}
 
+# ---------------------------------------------------------------------------
+# Fire & Safety Command Center
+# ---------------------------------------------------------------------------
 
+def _fire_status_from_events(zone_id: str, alarms: List[Dict[str, Any]]) -> str:
+    open_for_zone = [a for a in alarms if a["zone_id"] == zone_id and a["status"] != "RESOLVED"]
+    if any(a["severity"] == "CRITICAL" for a in open_for_zone):
+        return "ALARM"
+    if open_for_zone:
+        return "ATTENTION"
+    return "NORMAL"
+
+
+@api.get("/fire/summary")
+async def fire_summary(user: User = Depends(require_module("FIRE_SAFETY")), plant_id: Optional[str] = None):
+    q: Dict[str, Any] = {"tenant_id": user.tenant_id}
+    if plant_id and plant_id != "all":
+        q["plant_id"] = plant_id
+
+    zones = await db.fire_zones.find(q, {"_id": 0}).to_list(200)
+    hydrants = await db.hydrants.find(q, {"_id": 0}).to_list(200)
+    sprinklers = await db.sprinkler_systems.find(q, {"_id": 0}).to_list(200)
+    pumps = await db.fire_pumps.find(q, {"_id": 0}).to_list(200)
+    tanks = await db.fire_water_tanks.find(q, {"_id": 0}).to_list(200)
+    hooters = await db.hooter_events.find(q, {"_id": 0}).to_list(200)
+    open_alarms = await db.fire_alarm_events.find(
+        {**q, "status": {"$ne": "RESOLVED"}}, {"_id": 0}
+    ).sort("created_at", -1).to_list(500)
+    incidents = await db.safety_incidents.find(q, {"_id": 0}).sort("created_at", -1).to_list(200)
+
+    critical_alarms = sum(1 for a in open_alarms if a["severity"] == "CRITICAL")
+    avg_hydrant_pressure = round(sum(h.get("pressure_bar") or 0 for h in hydrants) / len(hydrants), 1) if hydrants else 0
+    pumps_ready = sum(1 for p in pumps if p["status"] in ("READY", "RUNNING"))
+    sprinklers_ready = sum(1 for s in sprinklers if s["status"] == "READY")
+    avg_tank_pct = round(sum(t["current_level_pct"] for t in tanks) / len(tanks), 1) if tanks else 0
+    hooters_active = sum(1 for h in hooters if h["state"] == "ON")
+
+    # readiness score: weighted composite (simple, transparent)
+    components = {
+        "fire_alarm": 100 if critical_alarms == 0 else max(0, 100 - critical_alarms * 25),
+        "hydrant": 100 if avg_hydrant_pressure >= 6 else max(0, round(avg_hydrant_pressure / 6 * 100)),
+        "sprinkler": round(sprinklers_ready * 100 / len(sprinklers)) if sprinklers else 100,
+        "fire_pumps": round(pumps_ready * 100 / len(pumps)) if pumps else 100,
+        "fire_tank": round(avg_tank_pct) if tanks else 100,
+        "emergency_system": 0 if hooters_active else 100,
+    }
+    readiness_score = round(sum(components.values()) / len(components))
+    overall_status = "ALARM" if critical_alarms > 0 or hooters_active else (
+        "ATTENTION" if readiness_score < 90 else "READY"
+    )
+
+    return {
+        "overall_status": overall_status,
+        "readiness_score": readiness_score,
+        "components": components,
+        "kpis": {
+            "critical_alarms": critical_alarms,
+            "avg_hydrant_pressure": avg_hydrant_pressure,
+            "sprinklers_ready": f"{sprinklers_ready}/{len(sprinklers)}",
+            "pumps_ready": f"{pumps_ready}/{len(pumps)}",
+            "avg_tank_pct": avg_tank_pct,
+            "hooters_active": hooters_active,
+        },
+        "zones": zones,
+        "recent_incidents": incidents[:10],
+    }
+
+
+@api.get("/fire/zones")
+async def list_fire_zones(user: User = Depends(require_module("FIRE_SAFETY"))):
+    return await db.fire_zones.find({"tenant_id": user.tenant_id}, {"_id": 0}).to_list(200)
+
+
+@api.get("/fire/alarms")
+async def list_fire_alarms(user: User = Depends(require_module("FIRE_SAFETY")),
+                            status: Optional[str] = None, severity: Optional[str] = None,
+                            limit: int = 100):
+    q: Dict[str, Any] = {"tenant_id": user.tenant_id}
+    if status:
+        q["status"] = status.upper()
+    if severity:
+        q["severity"] = severity.upper()
+    return await db.fire_alarm_events.find(q, {"_id": 0}).sort("created_at", -1).to_list(limit)
+
+
+@api.post("/fire/alarms/{alarm_id}/acknowledge")
+async def acknowledge_fire_alarm(alarm_id: str, user: User = Depends(require_module("FIRE_SAFETY"))):
+    res = await db.fire_alarm_events.update_one(
+        {"id": alarm_id, "tenant_id": user.tenant_id},
+        {"$set": {"status": "ACKNOWLEDGED", "acknowledged": True,
+                   "acknowledged_by": user.email,
+                   "acknowledged_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Fire alarm event not found")
+    await record_audit(user, "fire_alarm.ack", "fire_alarm_event", alarm_id, {})
+    return {"ok": True}
+
+
+@api.get("/fire/hydrants")
+async def list_hydrants(user: User = Depends(require_module("FIRE_SAFETY"))):
+    return await db.hydrants.find({"tenant_id": user.tenant_id}, {"_id": 0}).to_list(200)
+
+
+@api.get("/fire/hydrants/{hydrant_id}/history")
+async def hydrant_pressure_history(hydrant_id: str, user: User = Depends(require_module("FIRE_SAFETY")),
+                                    limit: int = 60):
+    return list(reversed(await db.hydrant_readings.find(
+        {"hydrant_id": hydrant_id, "tenant_id": user.tenant_id}, {"_id": 0}
+    ).sort("ts", -1).to_list(limit)))
+
+
+@api.get("/fire/sprinklers")
+async def list_sprinklers(user: User = Depends(require_module("FIRE_SAFETY"))):
+    return await db.sprinkler_systems.find({"tenant_id": user.tenant_id}, {"_id": 0}).to_list(200)
+
+
+@api.get("/fire/pumps")
+async def list_fire_pumps(user: User = Depends(require_module("FIRE_SAFETY"))):
+    return await db.fire_pumps.find({"tenant_id": user.tenant_id}, {"_id": 0}).to_list(200)
+
+
+@api.get("/fire/pumps/{pump_id}/history")
+async def fire_pump_pressure_history(pump_id: str, user: User = Depends(require_module("FIRE_SAFETY")),
+                                      limit: int = 60):
+    return list(reversed(await db.fire_pump_readings.find(
+        {"pump_id": pump_id, "tenant_id": user.tenant_id}, {"_id": 0}
+    ).sort("ts", -1).to_list(limit)))
+
+
+@api.get("/fire/tanks")
+async def list_fire_tanks(user: User = Depends(require_module("FIRE_SAFETY"))):
+    return await db.fire_water_tanks.find({"tenant_id": user.tenant_id}, {"_id": 0}).to_list(200)
+
+
+@api.get("/fire/hooters")
+async def list_hooters(user: User = Depends(require_module("FIRE_SAFETY"))):
+    return await db.hooter_events.find({"tenant_id": user.tenant_id}, {"_id": 0}).to_list(200)
+
+
+@api.post("/fire/hooters/{hooter_id}/acknowledge")
+async def acknowledge_hooter(hooter_id: str, user: User = Depends(require_module("FIRE_SAFETY"))):
+    res = await db.hooter_events.update_one(
+        {"id": hooter_id, "tenant_id": user.tenant_id},
+        {"$set": {"acknowledged": True}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Hooter event not found")
+    await record_audit(user, "hooter.ack", "hooter_event", hooter_id, {})
+    return {"ok": True}
+
+
+@api.get("/fire/incidents")
+async def list_safety_incidents(user: User = Depends(require_module("FIRE_SAFETY")),
+                                 status: Optional[str] = None, limit: int = 100):
+    q: Dict[str, Any] = {"tenant_id": user.tenant_id}
+    if status:
+        q["status"] = status.upper()
+    return await db.safety_incidents.find(q, {"_id": 0}).sort("created_at", -1).to_list(limit)
+
+
+@api.post("/fire/incidents")
+async def create_safety_incident(payload: SafetyIncidentCreate,
+                                  user: User = Depends(require_module("FIRE_SAFETY"))):
+    doc = {
+        "id": str(uuid.uuid4()),
+        "tenant_id": user.tenant_id,
+        "plant_id": user.plants[0] if user.plants else None,
+        "zone_id": payload.zone_id,
+        "event": payload.event,
+        "severity": payload.severity.upper(),
+        "status": "OPEN",
+        "assigned_to": payload.assigned_to,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "resolved_at": None,
+    }
+    await db.safety_incidents.insert_one(doc.copy())
+    await record_audit(user, "incident.create", "safety_incident", doc["id"], {"event": doc["event"]})
+    doc.pop("_id", None)
+    return doc
+
+
+@api.put("/fire/incidents/{incident_id}")
+async def update_safety_incident(incident_id: str, payload: SafetyIncidentUpdate,
+                                  user: User = Depends(require_module("FIRE_SAFETY"))):
+    update: Dict[str, Any] = {}
+    if payload.status:
+        update["status"] = payload.status.upper()
+        if payload.status.upper() in ("RESOLVED", "CLOSED"):
+            update["resolved_at"] = datetime.now(timezone.utc).isoformat()
+    if payload.assigned_to is not None:
+        update["assigned_to"] = payload.assigned_to
+    if not update:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    res = await db.safety_incidents.update_one(
+        {"id": incident_id, "tenant_id": user.tenant_id}, {"$set": update}
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    await record_audit(user, "incident.update", "safety_incident", incident_id, update)
+    return {"ok": True}
 # ---------------------------------------------------------------------------
 # Mount
 # ---------------------------------------------------------------------------
