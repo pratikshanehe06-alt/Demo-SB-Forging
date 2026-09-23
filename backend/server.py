@@ -142,14 +142,6 @@ oauth2 = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
 # Models
 # ---------------------------------------------------------------------------
 
-class UserCreate(BaseModel):
-    email: EmailStr
-    name: str
-    role: str
-    password: str
-    employee_id: Optional[str] = None
-    assigned_asset_id: Optional[str] = None
-    allowed_modules: Optional[List[str]] = None  # omit or null = unrestricted
 
 
 class UserUpdate(BaseModel):
@@ -175,7 +167,12 @@ class Tenant(BaseModel):
     id: str
     code: str
     name: str
-
+    active: bool = True
+ 
+ 
+class TenantUpdate(BaseModel):
+    name: Optional[str] = None
+    active: Optional[bool] = None
 
 class User(BaseModel):
     id: str
@@ -187,7 +184,19 @@ class User(BaseModel):
     plants: List[str] = []
     active: bool = True
     assigned_asset_id: Optional[str] = None
-    allowed_modules: Optional[List[str]] = None  # None/empty = unrestricted (sees every module the tenant has enabled)
+    assigned_asset_ids: List[str] = []       # NEW — multi-machine access list
+    allowed_modules: Optional[List[str]] = None
+ 
+ 
+class UserCreate(BaseModel):
+    email: EmailStr
+    name: str
+    role: str
+    password: str
+    employee_id: Optional[str] = None
+    assigned_asset_id: Optional[str] = None          # single "primary machine" — used by Operator Runbook
+    assigned_asset_ids: Optional[List[str]] = None    # multi-machine access list — Supervisor/Operator
+    allowed_modules: Optional[List[str]] = None       # module restriction — None/[] = unrestricted
 
 
 class LoginRequest(BaseModel):
@@ -1351,6 +1360,30 @@ async def assets_downtime_summary(user: User = Depends(get_current_user), days: 
         s["events"] += 1
     return list(summary.values())
 
+@api.get("/assets/overview-metrics")
+async def assets_overview_metrics(user: User = Depends(require_module("APM"))):
+    """Bulk running hours, downtime, production totals and maintenance ETA
+    per asset — powers the Asset Hierarchy card template."""
+    assets = await db.assets.find({"tenant_id": user.tenant_id}, {"_id": 0}).to_list(2000)
+    out: Dict[str, Any] = {}
+    for a in assets:
+        m = await _compute_asset_metrics(user.tenant_id, a)
+        produced = await db.production_log.aggregate([
+            {"$match": {"tenant_id": user.tenant_id, "asset_id": a["id"]}},
+            {"$group": {"_id": None, "total": {"$sum": "$produced"}}},
+        ]).to_list(1)
+        total_produced = produced[0]["total"] if produced else 0
+        eta_days = None
+        if m.get("next_maintenance") and m["next_maintenance"].get("next_due_at"):
+            due = datetime.fromisoformat(m["next_maintenance"]["next_due_at"])
+            eta_days = max(0, (due - datetime.now(timezone.utc)).days)
+        out[a["id"]] = {
+            "runtime_hours": m["runtime_hours"],
+            "downtime_min_total": m["downtime_min_total"],
+            "production_total": total_produced,
+            "maintenance_eta_days": eta_days,
+        }
+    return out
 
 
 @api.get("/assets/{asset_id}")
@@ -2027,6 +2060,8 @@ async def ums_summary(user: User = Depends(require_module("EEMS")), plant_id: Op
     }
 
 
+
+
 @api.get("/ums/assets")
 async def list_ums_assets(user: User = Depends(require_module("EEMS")),
                            utility_type: Optional[str] = None, plant_id: Optional[str] = None):
@@ -2252,13 +2287,7 @@ async def list_financial_records(user: User = Depends(require_module("FINANCIAL_
 # ---------------------------------------------------------------------------
 
 
-class UserCreate(BaseModel):
-    email: EmailStr
-    name: str
-    role: str
-    password: str
-    employee_id: Optional[str] = None
-    assigned_asset_id: Optional[str] = None
+
 
 
 class UserUpdate(BaseModel):
@@ -2288,6 +2317,8 @@ async def create_user(payload: UserCreate, user: User = Depends(get_current_user
         "plants": [],
         "active": True,
         "assigned_asset_id": payload.assigned_asset_id,
+        "assigned_asset_ids": payload.assigned_asset_ids or [],
+        "allowed_modules": payload.allowed_modules,
         "password": hash_password(payload.password),
     }
     await db.users.insert_one(doc.copy())
@@ -2295,8 +2326,20 @@ async def create_user(payload: UserCreate, user: User = Depends(get_current_user
     doc.pop("password", None)
     doc.pop("_id", None)
     return doc
-
-
+ 
+ 
+class UserUpdate(BaseModel):
+    name: Optional[str] = None
+    role: Optional[str] = None
+    employee_id: Optional[str] = None
+    active: Optional[bool] = None
+    password: Optional[str] = None
+    assigned_asset_id: Optional[str] = None
+    assigned_asset_ids: Optional[List[str]] = None
+    allowed_modules: Optional[List[str]] = None
+    clear_module_restriction: bool = False
+ 
+ 
 @api.put("/users/{user_id}")
 async def update_user(user_id: str, payload: UserUpdate, user: User = Depends(get_current_user)):
     if user.role != "TENANT_ADMIN":
@@ -2305,7 +2348,7 @@ async def update_user(user_id: str, payload: UserUpdate, user: User = Depends(ge
     if not target:
         raise HTTPException(status_code=404, detail="User not found")
     update: Dict[str, Any] = {}
-    for k in ("name", "role", "employee_id", "active"):
+    for k in ("name", "role", "employee_id", "active", "assigned_asset_id", "assigned_asset_ids"):
         v = getattr(payload, k)
         if v is not None:
             update[k] = v
@@ -2321,6 +2364,7 @@ async def update_user(user_id: str, payload: UserUpdate, user: User = Depends(ge
     await record_audit(user, "user.update", "user", user_id,
                        {"fields": [k for k in update.keys() if k != "password"]})
     return {"ok": True}
+ 
 
 
 @api.delete("/users/{user_id}")
@@ -3281,6 +3325,7 @@ async def compare_fire_assets(user: User = Depends(require_module("FIRE_SAFETY")
         out.append({**a, "history": history, "maintenance_count": mnt_count})
     return out
 
+
 @api.get("/fire/assets/predictive-overview")
 async def fire_assets_predictive_overview(user: User = Depends(require_module("FIRE_SAFETY"))):
     assets = await db.fire_assets.find({"tenant_id": user.tenant_id}, {"_id": 0}).to_list(500)
@@ -3308,6 +3353,7 @@ async def fire_assets_predictive_overview(user: User = Depends(require_module("F
         "upcoming_maintenance": upcoming_all,
         "high_risk_assets": high_risk,
     }
+
 
 
 # --- Dynamic {asset_id} routes come AFTER the literal ones above ---
@@ -3902,6 +3948,70 @@ async def update_safety_incident(incident_id: str, payload: SafetyIncidentUpdate
         raise HTTPException(status_code=404, detail="Incident not found")
     await record_audit(user, "incident.update", "safety_incident", incident_id, update)
     return {"ok": True}
+
+
+
+@api.get("/platform/tenants")
+async def platform_list_tenants(user: User = Depends(require_super_admin)):
+    tenants = await db.tenants.find({}, {"_id": 0}).to_list(200)
+    out = []
+    for t in tenants:
+        users_ct = await db.users.count_documents({"tenant_id": t["id"]})
+        assets_ct = await db.assets.count_documents({"tenant_id": t["id"]})
+        plants_ct = await db.plants.count_documents({"tenant_id": t["id"]})
+        tm = await db.tenant_modules.find_one({"tenant_id": t["id"]}, {"_id": 0, "modules": 1})
+        mods = (tm or {}).get("modules", {})
+        template = "BOTH" if (mods.get("APM") and mods.get("FIRE_SAFETY")) else (
+            "FIRE_SAFETY" if mods.get("FIRE_SAFETY") else "APM"
+        )
+        out.append({**t, "active": t.get("active", True), "users_count": users_ct,
+                    "assets_count": assets_ct, "plants_count": plants_ct, "template": template})
+    return out
+ 
+ 
+@api.get("/platform/tenants/{tenant_id}")
+async def platform_get_tenant(tenant_id: str, user: User = Depends(require_super_admin)):
+    t = await db.tenants.find_one({"id": tenant_id}, {"_id": 0})
+    if not t:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    users_ct = await db.users.count_documents({"tenant_id": tenant_id})
+    assets_ct = await db.assets.count_documents({"tenant_id": tenant_id})
+    plants_ct = await db.plants.count_documents({"tenant_id": tenant_id})
+    admins = await db.users.find(
+        {"tenant_id": tenant_id, "role": "TENANT_ADMIN"}, {"_id": 0, "password": 0}
+    ).to_list(20)
+    tm = await db.tenant_modules.find_one({"tenant_id": tenant_id}, {"_id": 0, "modules": 1})
+    mods = (tm or {}).get("modules", {})
+    template = "BOTH" if (mods.get("APM") and mods.get("FIRE_SAFETY")) else (
+        "FIRE_SAFETY" if mods.get("FIRE_SAFETY") else "APM"
+    )
+    return {
+        **t, "active": t.get("active", True),
+        "users_count": users_ct, "assets_count": assets_ct, "plants_count": plants_ct,
+        "admins": admins, "template": template, "modules": mods,
+    }
+ 
+ 
+@api.put("/platform/tenants/{tenant_id}")
+async def platform_update_tenant(tenant_id: str, payload: TenantUpdate,
+                                  user: User = Depends(require_super_admin)):
+    t = await db.tenants.find_one({"id": tenant_id})
+    if not t:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    if t.get("code") == "PLATFORM" and payload.active is False:
+        raise HTTPException(status_code=400, detail="Cannot deactivate the PLATFORM tenant")
+    update: Dict[str, Any] = {}
+    if payload.name is not None:
+        update["name"] = payload.name
+    if payload.active is not None:
+        update["active"] = payload.active
+    if not update:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    await db.tenants.update_one({"id": tenant_id}, {"$set": update})
+    await record_audit(user, "tenant.update", "tenant", tenant_id, update, tenant_id=tenant_id)
+    updated = await db.tenants.find_one({"id": tenant_id}, {"_id": 0})
+    return updated
+ 
 # ---------------------------------------------------------------------------
 # Mount
 # ---------------------------------------------------------------------------

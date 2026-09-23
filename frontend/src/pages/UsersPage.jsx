@@ -9,10 +9,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+  DropdownMenuSeparator, DropdownMenuCheckboxItem
+} from "@/components/ui/dropdown-menu";
+import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue
 } from "@/components/ui/select";
 import { toast } from "sonner";
-import { UserCog, UserPlus, Pencil, UserX, Wrench, ShieldCheck } from "lucide-react";
+import { UserCog, UserPlus, Pencil, UserX, Wrench, ShieldCheck, ChevronDown } from "lucide-react";
 
 const ROLE_LABEL = {
   TENANT_ADMIN: "Tenant Admin",
@@ -119,14 +123,24 @@ export default function UsersPage() {
                   )}
                 </td>
                 <td className="py-3 px-2">
-                  {u.role === "OPERATOR" ? (
-                    u.assigned_asset ? (
-                      <span className="inline-flex items-center gap-1.5 text-slate-700 text-sm">
-                        <Wrench className="h-3.5 w-3.5 text-slate-500" />
-                        <span className="font-medium">{u.assigned_asset.asset_code}</span>
+                  <div className="flex flex-col gap-0.5">
+                    {u.role === "OPERATOR" && (
+                      u.assigned_asset ? (
+                        <span className="inline-flex items-center gap-1.5 text-slate-700 text-sm">
+                          <Wrench className="h-3.5 w-3.5 text-slate-500" />
+                          <span className="font-medium">{u.assigned_asset.asset_code}</span>
+                        </span>
+                      ) : <span className="text-slate-400 text-xs italic">unassigned</span>
+                    )}
+                    {["SUPERVISOR", "OPERATOR"].includes(u.role) && (
+                      <span className="text-[10px] text-slate-500" title={(u.assigned_asset_ids || []).join(", ")}>
+                        {(u.assigned_asset_ids || []).length > 0
+                          ? `${u.assigned_asset_ids.length} machine${u.assigned_asset_ids.length !== 1 ? "s" : ""} access`
+                          : "unrestricted access"}
                       </span>
-                    ) : <span className="text-slate-400 text-xs italic">unassigned</span>
-                  ) : <span className="text-slate-400 text-xs">—</span>}
+                    )}
+                    {!["SUPERVISOR", "OPERATOR"].includes(u.role) && <span className="text-slate-400 text-xs">—</span>}
+                  </div>
                 </td>
                 <td className="py-3 px-2">
                   <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${u.active === false ? "bg-slate-100 text-slate-500" : "bg-emerald-50 text-emerald-700"}`}>
@@ -160,8 +174,8 @@ export default function UsersPage() {
 
       <AssignDialog open={!!assignTarget} target={assignTarget} assets={assets}
         onClose={() => setAssignTarget(null)} onSaved={() => { setAssignTarget(null); load(); }} />
-      <CreateUserDialog open={openCreate} onOpenChange={setOpenCreate} modules={modules} onCreated={load} />
-      <EditUserDialog target={editTarget} modules={modules} onClose={() => setEditTarget(null)} onSaved={() => { setEditTarget(null); load(); }} />
+      <CreateUserDialog open={openCreate} onOpenChange={setOpenCreate} modules={modules} assets={assets} onCreated={load} />
+      <EditUserDialog target={editTarget} modules={modules} assets={assets} onClose={() => setEditTarget(null)} onSaved={() => { setEditTarget(null); load(); }} />
     </div>
   );
 }
@@ -198,14 +212,59 @@ function AssignDialog({ open, target, assets, onClose, onSaved }) {
   );
 }
 
+function MachineAccessPicker({ assets, selected, setSelected }) {
+  const allSelected = assets.length > 0 && selected.length === assets.length;
+  function toggleAsset(id) {
+    setSelected((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
+  }
+  return (
+    <div className="col-span-2">
+      <Label className="text-xs uppercase tracking-wider font-semibold text-slate-600">Assigned Machines</Label>
+      <p className="text-[10px] text-slate-500 mt-0.5 mb-1.5">This user will only be able to access and manage these machines. Leave empty for unrestricted access.</p>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            data-testid="machine-access-dropdown"
+            className="w-full flex items-center justify-between h-10 px-3 rounded-md border border-slate-200 bg-white text-sm hover:border-slate-300"
+          >
+            <span className="text-slate-700">
+              {selected.length === 0 ? "All machines (unrestricted)" : `${selected.length} machine${selected.length !== 1 ? "s" : ""} selected`}
+            </span>
+            <ChevronDown className="h-4 w-4 text-slate-400" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-80 bg-white max-h-72 overflow-y-auto">
+          <DropdownMenuItem
+            onSelect={(e) => { e.preventDefault(); setSelected(allSelected ? [] : assets.map((a) => a.id)); }}
+            className="font-medium text-[color:var(--brand-blue)]"
+          >
+            {allSelected ? "Clear all" : "Select all"}
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          {assets.map((a) => (
+            <DropdownMenuCheckboxItem
+              key={a.id}
+              checked={selected.includes(a.id)}
+              onCheckedChange={() => toggleAsset(a.id)}
+              onSelect={(e) => e.preventDefault()}
+              data-testid={`machine-option-${a.asset_code}`}
+            >
+              <span className="font-mono text-xs mr-1.5 text-slate-400">{a.asset_code}</span>{a.name}
+            </DropdownMenuCheckboxItem>
+          ))}
+          {assets.length === 0 && <div className="px-2 py-1.5 text-xs text-slate-400">No machines found.</div>}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
+}
+
 function ModuleAccessPicker({ modules, restricted, setRestricted, selected, setSelected }) {
   const allSelected = modules.length > 0 && selected.length === modules.length;
 
   function toggleModule(key) {
     setSelected((prev) => prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]);
-  }
-  function toggleAll() {
-    setSelected(allSelected ? [] : modules.map((m) => m.key));
   }
 
   return (
@@ -221,47 +280,74 @@ function ModuleAccessPicker({ modules, restricted, setRestricted, selected, setS
           Restrict to selected modules
         </label>
       </div>
+
       {!restricted ? (
         <div className="text-xs text-slate-500 bg-slate-50 rounded-md px-3 py-2 flex items-center gap-1.5">
           <ShieldCheck className="h-3.5 w-3.5 text-emerald-600" />
           Full access — sees every module enabled for this tenant.
         </div>
       ) : (
-        <div className="border rounded-md p-3 max-h-48 overflow-y-auto space-y-1.5">
-          <div className="flex items-center justify-between pb-1.5 border-b mb-1.5">
-            <span className="text-[11px] text-slate-500">{selected.length} of {modules.length} selected</span>
-            <button type="button" onClick={toggleAll} className="text-[11px] font-medium text-[color:var(--brand-blue)] hover:underline">
-              {allSelected ? "Clear all" : "Select all"}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              data-testid="module-access-dropdown"
+              className="w-full flex items-center justify-between h-10 px-3 rounded-md border border-slate-200 bg-white text-sm hover:border-slate-300"
+            >
+              <span className="text-slate-700">
+                {selected.length === 0 ? "Select modules…" : `${selected.length} module${selected.length !== 1 ? "s" : ""} selected`}
+              </span>
+              <ChevronDown className="h-4 w-4 text-slate-400" />
             </button>
-          </div>
-          {modules.map((m) => (
-            <label key={m.key} className="flex items-center gap-2 text-sm py-0.5 cursor-pointer" data-testid={`module-option-${m.key.toLowerCase()}`}>
-              <Checkbox checked={selected.includes(m.key)} onCheckedChange={() => toggleModule(m.key)} />
-              <span className="text-slate-700">{m.name}</span>
-            </label>
-          ))}
-          {modules.length === 0 && <div className="text-xs text-slate-400">No modules enabled for this tenant yet.</div>}
-        </div>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-72 bg-white max-h-72 overflow-y-auto">
+            <DropdownMenuItem
+              onSelect={(e) => { e.preventDefault(); setSelected(allSelected ? [] : modules.map((m) => m.key)); }}
+              className="font-medium text-[color:var(--brand-blue)]"
+            >
+              {allSelected ? "Clear all" : "Select all"}
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            {modules.map((m) => (
+              <DropdownMenuCheckboxItem
+                key={m.key}
+                checked={selected.includes(m.key)}
+                onCheckedChange={() => toggleModule(m.key)}
+                onSelect={(e) => e.preventDefault()}
+                data-testid={`module-option-${m.key.toLowerCase()}`}
+              >
+                {m.name}
+              </DropdownMenuCheckboxItem>
+            ))}
+            {modules.length === 0 && <div className="px-2 py-1.5 text-xs text-slate-400">No modules enabled for this tenant yet.</div>}
+          </DropdownMenuContent>
+        </DropdownMenu>
       )}
     </div>
   );
 }
 
-function CreateUserDialog({ open, onOpenChange, modules, onCreated }) {
+function CreateUserDialog({ open, onOpenChange, modules, assets, onCreated }) {
   const [form, setForm] = useState({ email: "", name: "", role: "OPERATOR", password: "", employee_id: "" });
   const [restricted, setRestricted] = useState(false);
   const [selectedModules, setSelectedModules] = useState([]);
+  const [selectedMachines, setSelectedMachines] = useState([]);
   function set(k, v) { setForm((f) => ({ ...f, [k]: v })); }
+  const showMachinePicker = ["SUPERVISOR", "OPERATOR"].includes(form.role);
 
   async function submit() {
     if (!form.email || !form.name || !form.password) { toast.error("Name, email and password are required"); return; }
     if (restricted && selectedModules.length === 0) { toast.error("Select at least one module, or turn off restriction"); return; }
     try {
-      await api.post("/users", { ...form, allowed_modules: restricted ? selectedModules : null });
+      await api.post("/users", {
+        ...form,
+        allowed_modules: restricted ? selectedModules : null,
+        assigned_asset_ids: showMachinePicker ? selectedMachines : [],
+      });
       toast.success("User created");
       onOpenChange(false); onCreated();
       setForm({ email: "", name: "", role: "OPERATOR", password: "", employee_id: "" });
-      setRestricted(false); setSelectedModules([]);
+      setRestricted(false); setSelectedModules([]); setSelectedMachines([]);
     } catch (e) { toast.error(e.response?.data?.detail || "Create failed"); }
   }
   return (
@@ -281,6 +367,10 @@ function CreateUserDialog({ open, onOpenChange, modules, onCreated }) {
               </SelectContent>
             </Select>
           </F>
+          <div />
+          {showMachinePicker && (
+            <MachineAccessPicker assets={assets} selected={selectedMachines} setSelected={setSelectedMachines} />
+          )}
           <ModuleAccessPicker
             modules={modules} restricted={restricted} setRestricted={setRestricted}
             selected={selectedModules} setSelected={setSelectedModules}
@@ -295,10 +385,12 @@ function CreateUserDialog({ open, onOpenChange, modules, onCreated }) {
   );
 }
 
-function EditUserDialog({ target, modules, onClose, onSaved }) {
+function EditUserDialog({ target, modules, assets, onClose, onSaved }) {
   const [form, setForm] = useState({ name: "", role: "OPERATOR", employee_id: "", password: "" });
   const [restricted, setRestricted] = useState(false);
   const [selectedModules, setSelectedModules] = useState([]);
+  const [selectedMachines, setSelectedMachines] = useState([]);
+  const showMachinePicker = ["SUPERVISOR", "OPERATOR"].includes(form.role);
 
   useEffect(() => {
     if (target) {
@@ -306,6 +398,7 @@ function EditUserDialog({ target, modules, onClose, onSaved }) {
       const hasRestriction = !!(target.allowed_modules && target.allowed_modules.length > 0);
       setRestricted(hasRestriction);
       setSelectedModules(hasRestriction ? target.allowed_modules : []);
+      setSelectedMachines(target.assigned_asset_ids || []);
     }
   }, [target]);
   function set(k, v) { setForm((f) => ({ ...f, [k]: v })); }
@@ -319,6 +412,7 @@ function EditUserDialog({ target, modules, onClose, onSaved }) {
     } else {
       payload.clear_module_restriction = true;
     }
+    payload.assigned_asset_ids = showMachinePicker ? selectedMachines : [];
     try {
       await api.put(`/users/${target.id}`, payload);
       toast.success("User updated"); onSaved();
@@ -341,6 +435,9 @@ function EditUserDialog({ target, modules, onClose, onSaved }) {
             </Select>
           </F>
           <F label="Reset Password (optional)"><Input type="password" value={form.password} onChange={(e) => set("password", e.target.value)} placeholder="Leave blank to keep" /></F>
+          {showMachinePicker && (
+            <MachineAccessPicker assets={assets} selected={selectedMachines} setSelected={setSelectedMachines} />
+          )}
           <ModuleAccessPicker
             modules={modules} restricted={restricted} setRestricted={setRestricted}
             selected={selectedModules} setSelected={setSelectedModules}

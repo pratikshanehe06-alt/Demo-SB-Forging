@@ -14,6 +14,40 @@
     --text-primary: #0f172a;
     --text-secondary: #475569;
     --text-tertiary: #64748b;
+
+    /* Utility colors used in the classes below — kept as variables
+       (not hardcoded hex) so .dark can override them. */
+    --side-item-hover-bg: #f1f5f9;
+    --side-item-active-bg: #eef4ff;
+    --side-item-active-text: var(--brand-navy);
+    --data-row-hover-bg: #f8fafc;
+    --telemetry-flash-color: rgba(37, 99, 235, 0.16);
+    --login-illustration-bg:
+        radial-gradient(circle at 30% 20%, rgba(37, 99, 235, 0.25), transparent 50%),
+        radial-gradient(circle at 80% 80%, rgba(30, 58, 138, 0.35), transparent 55%),
+        linear-gradient(180deg, #f8fafc 0%, #e0e7ff 100%);
+}
+
+.dark {
+    --brand-navy: #3b5bb8;
+    --brand-navy-deep: #16234f;
+    --brand-blue: #5b8def;
+    --workspace: #0f1420;
+    --card: #161c2c;
+    --border: #2a3244;
+    --text-primary: #e8ecf5;
+    --text-secondary: #a8b1c4;
+    --text-tertiary: #7c869c;
+
+    --side-item-hover-bg: #1e2536;
+    --side-item-active-bg: #1c2a4a;
+    --side-item-active-text: #8fb0f5;
+    --data-row-hover-bg: #1a2032;
+    --telemetry-flash-color: rgba(91, 141, 239, 0.22);
+    --login-illustration-bg:
+        radial-gradient(circle at 30% 20%, rgba(91, 141, 239, 0.18), transparent 50%),
+        radial-gradient(circle at 80% 80%, rgba(30, 58, 138, 0.35), transparent 55%),
+        linear-gradient(180deg, #0f1420 0%, #151a2c 100%);
 }
 
 @layer base {
@@ -39,6 +73,28 @@
         --ring: 224 76% 33%;
         --radius: 0.5rem;
     }
+
+    .dark {
+        --background: 222 32% 10%;
+        --foreground: 220 25% 92%;
+        --card: 222 28% 14%;
+        --card-foreground: 220 25% 92%;
+        --popover: 222 28% 14%;
+        --popover-foreground: 220 25% 92%;
+        --primary: 221 66% 62%;
+        --primary-foreground: 222 32% 10%;
+        --secondary: 222 22% 20%;
+        --secondary-foreground: 220 25% 92%;
+        --muted: 222 22% 18%;
+        --muted-foreground: 218 14% 65%;
+        --accent: 222 22% 20%;
+        --accent-foreground: 220 25% 92%;
+        --destructive: 0 70% 55%;
+        --destructive-foreground: 0 0% 98%;
+        --border: 222 20% 24%;
+        --input: 222 20% 24%;
+        --ring: 221 66% 62%;
+    }
 }
 
 @layer base {
@@ -61,6 +117,7 @@
         font-feature-settings:
             "cv11" on,
             "ss01" on;
+        transition: background-color 150ms ease, color 150ms ease;
     }
     h1,
     h2,
@@ -122,7 +179,7 @@
 }
 @keyframes flashHighlight {
     0% {
-        background-color: rgba(37, 99, 235, 0.16);
+        background-color: var(--telemetry-flash-color);
     }
     100% {
         background-color: transparent;
@@ -144,32 +201,127 @@
         color 150ms ease;
 }
 .side-item:hover {
-    background-color: #f1f5f9;
+    background-color: var(--side-item-hover-bg);
     color: var(--text-primary);
 }
 .side-item.active {
-    background: #eef4ff;
-    color: var(--brand-navy);
+    background: var(--side-item-active-bg);
+    color: var(--side-item-active-text);
     font-weight: 600;
 }
 
 /* Login industrial illustration */
 .login-illustration {
-    background:
-        radial-gradient(
-            circle at 30% 20%,
-            rgba(37, 99, 235, 0.25),
-            transparent 50%
-        ),
-        radial-gradient(
-            circle at 80% 80%,
-            rgba(30, 58, 138, 0.35),
-            transparent 55%
-        ),
-        linear-gradient(180deg, #f8fafc 0%, #e0e7ff 100%);
+    background: var(--login-illustration-bg);
 }
 
 /* Data-testid usage table row hover */
 .data-row:hover {
-    background-color: #f8fafc;
+    background-color: var(--data-row-hover-bg);
 }
+
+/* ==========================================================================
+   Dark-mode retrofit for hardcoded Tailwind utility classes.
+   Most pages in this app use literal classes like `bg-white`,
+   `text-slate-700`, `bg-red-50 text-red-700 border-red-200` directly in
+   JSX instead of the CSS variables above. Rather than editing every page
+   file individually, these overrides remap those exact classes whenever
+   `.dark` is active on <html>, so the toggle works retroactively across
+   the whole app. New pages should still prefer the variables/shadcn
+   tokens above — this block exists to cover what's already built.
+   ========================================================================== */
+
+/* Core neutrals: card backgrounds, page backgrounds, borders, text */
+.dark .bg-white { background-color: var(--card) !important; }
+.dark .bg-slate-50 { background-color: #1a2032 !important; }
+.dark .bg-slate-100 { background-color: #222a3d !important; }
+.dark .bg-slate-100\/50 { background-color: rgba(34, 42, 61, 0.5) !important; }
+.dark .hover\:bg-slate-50:hover { background-color: var(--side-item-hover-bg) !important; }
+.dark .hover\:bg-slate-100:hover { background-color: #222a3d !important; }
+
+.dark .text-slate-900 { color: var(--text-primary) !important; }
+.dark .text-slate-800 { color: var(--text-primary) !important; }
+.dark .text-slate-700 { color: var(--text-secondary) !important; }
+.dark .text-slate-600 { color: var(--text-secondary) !important; }
+.dark .text-slate-500 { color: #9aa3b8 !important; }
+.dark .text-slate-400 { color: #808aa0 !important; }
+.dark .text-slate-300 { color: #6b7488 !important; }
+.dark .placeholder\:text-slate-400::placeholder { color: #5b6478 !important; }
+
+.dark .border-slate-100 { border-color: var(--border) !important; }
+.dark .border-slate-200 { border-color: var(--border) !important; }
+.dark .border-slate-300 { border-color: #3a4459 !important; }
+.dark .divide-slate-100 > * + * { border-color: var(--border) !important; }
+.dark .divide-slate-200 > * + * { border-color: var(--border) !important; }
+
+/* Status/severity badge pills: bg-{color}-50 + text-{color}-700 + border-{color}-200 */
+.dark .bg-red-50 { background-color: rgba(239, 68, 68, 0.14) !important; }
+.dark .text-red-700, .dark .text-red-600, .dark .text-red-800 { color: #fca5a5 !important; }
+.dark .border-red-200 { border-color: rgba(239, 68, 68, 0.35) !important; }
+.dark .bg-red-100 { background-color: rgba(239, 68, 68, 0.2) !important; }
+
+.dark .bg-orange-50 { background-color: rgba(249, 115, 22, 0.14) !important; }
+.dark .text-orange-700, .dark .text-orange-600 { color: #fdba74 !important; }
+.dark .border-orange-200 { border-color: rgba(249, 115, 22, 0.35) !important; }
+
+.dark .bg-amber-50 { background-color: rgba(245, 158, 11, 0.14) !important; }
+.dark .text-amber-700, .dark .text-amber-600, .dark .text-amber-800 { color: #fcd34d !important; }
+.dark .border-amber-200 { border-color: rgba(245, 158, 11, 0.35) !important; }
+
+.dark .bg-yellow-50 { background-color: rgba(234, 179, 8, 0.14) !important; }
+.dark .text-yellow-700, .dark .text-yellow-600 { color: #fde047 !important; }
+.dark .border-yellow-200 { border-color: rgba(234, 179, 8, 0.35) !important; }
+
+.dark .bg-emerald-50 { background-color: rgba(16, 185, 129, 0.14) !important; }
+.dark .text-emerald-700, .dark .text-emerald-600, .dark .text-emerald-800 { color: #6ee7b7 !important; }
+.dark .border-emerald-200 { border-color: rgba(16, 185, 129, 0.35) !important; }
+
+.dark .bg-green-50 { background-color: rgba(34, 197, 94, 0.14) !important; }
+.dark .text-green-700, .dark .text-green-600 { color: #86efac !important; }
+.dark .border-green-200 { border-color: rgba(34, 197, 94, 0.35) !important; }
+
+.dark .bg-teal-50 { background-color: rgba(20, 184, 166, 0.14) !important; }
+.dark .text-teal-700, .dark .text-teal-600 { color: #5eead4 !important; }
+.dark .border-teal-200 { border-color: rgba(20, 184, 166, 0.35) !important; }
+
+.dark .bg-cyan-50 { background-color: rgba(6, 182, 212, 0.14) !important; }
+.dark .text-cyan-700, .dark .text-cyan-600 { color: #67e8f9 !important; }
+.dark .border-cyan-200 { border-color: rgba(6, 182, 212, 0.35) !important; }
+
+.dark .bg-blue-50 { background-color: rgba(59, 130, 246, 0.14) !important; }
+.dark .text-blue-700, .dark .text-blue-600 { color: #93c5fd !important; }
+.dark .border-blue-200 { border-color: rgba(59, 130, 246, 0.35) !important; }
+
+.dark .bg-indigo-50 { background-color: rgba(99, 102, 241, 0.14) !important; }
+.dark .text-indigo-700, .dark .text-indigo-600 { color: #a5b4fc !important; }
+.dark .border-indigo-200 { border-color: rgba(99, 102, 241, 0.35) !important; }
+
+.dark .bg-purple-50 { background-color: rgba(168, 85, 247, 0.14) !important; }
+.dark .text-purple-700, .dark .text-purple-600 { color: #d8b4fe !important; }
+.dark .border-purple-200 { border-color: rgba(168, 85, 247, 0.35) !important; }
+
+.dark .bg-slate-50.border-slate-200,
+.dark .bg-slate-50 { background-color: #1a2032 !important; }
+.dark .text-slate-600.bg-slate-50 { color: var(--text-secondary) !important; }
+
+/* Icon-only accent colors used without a pill background */
+.dark .text-red-500 { color: #f87171 !important; }
+.dark .text-amber-500 { color: #fbbf24 !important; }
+.dark .text-emerald-500 { color: #34d399 !important; }
+.dark .text-green-500 { color: #4ade80 !important; }
+.dark .text-blue-500 { color: #60a5fa !important; }
+.dark .text-orange-500 { color: #fb923c !important; }
+
+/* Solid status fill colors (dots, small filled circles) stay vivid as-is —
+   they're deliberate semantic accents, not backgrounds needing contrast fixes. */
+
+/* Table header row + zebra striping */
+.dark thead tr,
+.dark .border-b { border-color: var(--border) !important; }
+.dark tbody tr:hover { background-color: var(--data-row-hover-bg) !important; }
+
+/* Disabled/opacity-50 rows still need a dark-safe base */
+.dark .opacity-50 { opacity: 0.4 !important; }
+
+/* Recharts grid/axis lines drawn with inline stroke="#f1f5f9" won't pick this up —
+   flagged as a follow-up if chart legibility in dark mode matters. */

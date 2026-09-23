@@ -1,10 +1,10 @@
 import { Link, NavLink, useNavigate, useLocation } from "react-router-dom";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import {
   LayoutDashboard, Boxes, Network, Users, ShieldCheck, ToggleRight,
   KeyRound, BellRing, FileBarChart2, ClipboardList, Settings, Search, Bell, LogOut, ChevronDown,
   TrendingUp, ShieldAlert, Factory, FileSpreadsheet, Flame, LayoutGrid, HeartPulse, Wrench, Activity, Sun, Droplet,
-  Package, ClipboardCheck, UserCheck, IndianRupee,
+  Package, ClipboardCheck, UserCheck, IndianRupee, Moon,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { usePlant } from "@/lib/plantContext";
@@ -17,7 +17,7 @@ import { api } from "@/lib/api";
 import { useTelemetryStream } from "@/lib/ws";
 
 const WORKSPACES = {
-  APM: { label: "APM Workspace", icon: LayoutGrid, home: "/dashboard" },
+  APM: { label: "Manufacturing Dashboard", icon: LayoutGrid, home: "/dashboard" },
   FIRE_SAFETY: { label: "Fire & Safety Workspace", icon: Flame, home: "/fire-safety" },
 };
 
@@ -36,7 +36,7 @@ function navForApm(role, modules) {
         { to: "/assets", label: "Asset Status – List", icon: Boxes },
         { to: "/assets/health", label: "Asset Health Overview", icon: HeartPulse },
         { to: "/assets/predictive", label: "Predictive Maintenance", icon: Wrench },
-        { to: "/assets/hierarchy", label: "Asset Hierarchy", icon: Network },
+        { to: "/assets/hierarchy", label: "Asset Dashboard", icon: Network },
         { to: "/assets/compare", label: "Asset Comparison", icon: TrendingUp },
         { to: "/alarms", label: "Alarms & Events", icon: BellRing },
       ],
@@ -112,7 +112,18 @@ export default function Layout({ children }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [escalations, setEscalations] = useState([]);
+  const [darkMode, setDarkMode] = useState(() => {
+    if (typeof window === "undefined") return false;
+    const stored = window.localStorage.getItem("coreot_theme");
+    if (stored) return stored === "dark";
+    return window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
+  });
   const { subscribe } = useTelemetryStream(token);
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", darkMode);
+    window.localStorage.setItem("coreot_theme", darkMode ? "dark" : "light");
+  }, [darkMode]);
 
   useEffect(() => {
     api.get("/escalations", { params: { limit: 20 } }).then((r) => setEscalations(r.data)).catch(() => {});
@@ -138,7 +149,22 @@ export default function Layout({ children }) {
   // If the user lands directly on a /fire-safety/* URL (bookmark, refresh,
   // direct link) while the stored workspace says APM, sync to Fire so the
   // sidebar matches what they're actually looking at.
+  //
+  // manualSwitchRef guards against a race: switchWorkspace() below calls
+  // setActiveWorkspace() and navigate() together, but useLocation() only
+  // updates once the router finishes processing navigate() — which can
+  // land one render AFTER activeWorkspace has already changed. In that
+  // one-tick window, this effect would see "activeWorkspace = APM" but
+  // "pathname = still /fire-safety/..." and incorrectly snap it back to
+  // FIRE_SAFETY, leaving the sidebar stuck on the old workspace even
+  // though the page itself navigated correctly. The ref lets an explicit
+  // switch suppress exactly one auto-correct pass.
+  const manualSwitchRef = useRef(false);
   useEffect(() => {
+    if (manualSwitchRef.current) {
+      manualSwitchRef.current = false;
+      return;
+    }
     if (location.pathname.startsWith("/fire-safety") && activeWorkspace !== "FIRE_SAFETY") {
       setActiveWorkspace("FIRE_SAFETY");
       window.localStorage.setItem("coreot_workspace", "FIRE_SAFETY");
@@ -161,6 +187,7 @@ export default function Layout({ children }) {
 
   function switchWorkspace(key) {
     if (key === activeWorkspace) return;
+    manualSwitchRef.current = true;
     setActiveWorkspace(key);
     window.localStorage.setItem("coreot_workspace", key);
     navigate(WORKSPACES[key].home);
@@ -282,6 +309,26 @@ export default function Layout({ children }) {
             ))}
           </DropdownMenuContent>
         </DropdownMenu>
+
+        <button
+          data-testid="theme-toggle"
+          onClick={() => setDarkMode((v) => !v)}
+          role="switch"
+          aria-checked={darkMode}
+          title={darkMode ? "Switch to light mode" : "Switch to dark mode"}
+          className="relative mr-2 flex h-7 w-14 items-center rounded-full border border-white/20 bg-white/10 px-1 transition-colors hover:bg-white/15"
+        >
+          <Sun className="h-3.5 w-3.5 text-yellow-300 shrink-0" />
+          <span
+            className="absolute top-0.5 left-0.5 grid h-6 w-6 place-items-center rounded-full bg-white shadow transition-transform duration-200"
+            style={{ transform: darkMode ? "translateX(28px)" : "translateX(0px)" }}
+          >
+            {darkMode
+              ? <Moon className="h-3.5 w-3.5 text-[color:var(--brand-navy)]" />
+              : <Sun className="h-3.5 w-3.5 text-amber-500" />}
+          </span>
+          <Moon className="h-3.5 w-3.5 text-slate-300 shrink-0 ml-auto" />
+        </button>
 
         <button data-testid="notif-btn" className="relative h-9 w-9 grid place-items-center rounded-md hover:bg-white/10">
           <Bell className="h-5 w-5" />
