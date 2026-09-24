@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { usePlant } from "@/lib/plantContext";
+import { useKiosk } from "@/lib/kioskContext";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator, DropdownMenuLabel
 } from "@/components/ui/dropdown-menu";
@@ -33,11 +34,10 @@ function navForApm(role, modules) {
     items.push({
       section: "APM", label: "APM", icon: Boxes,
       children: [
+        { to: "/assets/hierarchy", label: "Asset Dashboard", icon: Network },
         { to: "/assets", label: "Asset Status – List", icon: Boxes },
         { to: "/assets/health", label: "Asset Health Overview", icon: HeartPulse },
         { to: "/assets/predictive", label: "Predictive Maintenance", icon: Wrench },
-        { to: "/assets/hierarchy", label: "Asset Dashboard", icon: Network },
-        { to: "/assets/compare", label: "Asset Comparison", icon: TrendingUp },
         { to: "/alarms", label: "Alarms & Events", icon: BellRing },
       ],
     });
@@ -52,7 +52,7 @@ function navForFireSafety() {
     {
       section: "Fire Assets", label: "Assets", icon: ShieldAlert,
       children: [
-        { to: "/fire-safety/assets", label: "Asset Status", icon: ShieldAlert },
+        { to: "/fire-safety/assets", label: "Assets Dashboard", icon: ShieldAlert },
         { to: "/fire-safety/assets/health", label: "Asset Health Overview", icon: HeartPulse },
         { to: "/fire-safety/assets/predictive", label: "Predictive Maintenance", icon: Wrench },
         { to: "/fire-safety/zones", label: "Fire Zones", icon: Network },
@@ -109,6 +109,7 @@ function navFor(role, modules, workspace) {
 export default function Layout({ children }) {
   const { user, tenant, logout, token, modules, refreshModules } = useAuth();
   const { plants, selectedPlantId, selectPlant } = usePlant();
+  const { isKiosk } = useKiosk();
   const navigate = useNavigate();
   const location = useLocation();
   const [escalations, setEscalations] = useState([]);
@@ -195,6 +196,8 @@ export default function Layout({ children }) {
 
   return (
     <div className="min-h-screen flex flex-col bg-[var(--workspace)]">
+      {!isKiosk && (
+      <>
       {/* Top header */}
       <header className="h-16 bg-[color:var(--brand-navy)] text-white flex items-center px-6 shadow-sm">
         <Link to="/" className="flex items-center gap-2 mr-6" data-testid="coreot-logo">
@@ -357,9 +360,12 @@ export default function Layout({ children }) {
           </DropdownMenuContent>
         </DropdownMenu>
       </header>
+      </>
+      )}
 
       <div className="flex-1 flex">
         {/* Sidebar */}
+        {!isKiosk && (
         <aside className="w-60 bg-white border-r border-[color:var(--border)] py-4 px-3">
           <div className="text-[10px] uppercase tracking-[0.14em] font-semibold text-slate-400 px-3 mb-2">
             {activeWorkspace === "FIRE_SAFETY"
@@ -397,8 +403,9 @@ export default function Layout({ children }) {
             ))}
           </nav>
         </aside>
+        )}
 
-        <main className="flex-1 p-6 overflow-x-hidden">{children}</main>
+        <main className={isKiosk ? "flex-1 overflow-hidden" : "flex-1 p-6 overflow-x-hidden"}>{children}</main>
       </div>
     </div>
   );

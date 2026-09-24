@@ -1,19 +1,14 @@
 import { useEffect, useState } from "react";
-import { useParams, Link } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
-import {
-  ArrowLeft, Droplets, Waves, Gauge, Fuel, Siren, Wrench, Clock, MapPin,
-} from "lucide-react";
-import {
-  LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
-} from "recharts";
+import { Droplets, Waves, Gauge, Fuel, Siren, Clock } from "lucide-react";
 
 const TYPE_META = {
-  HYDRANT: { label: "Hydrant", icon: Droplets, metricKey: "pressure_bar", metricUnit: "bar" },
-  SPRINKLER_SYSTEM: { label: "Sprinkler System", icon: Waves, metricKey: null, metricUnit: "" },
-  FIRE_PUMP: { label: "Fire Pump", icon: Gauge, metricKey: "pressure_bar", metricUnit: "bar" },
-  FIRE_WATER_TANK: { label: "Fire Water Tank", icon: Fuel, metricKey: "level_pct", metricUnit: "%" },
-  HOOTER: { label: "Hooter", icon: Siren, metricKey: null, metricUnit: "" },
+  HYDRANT: { label: "Hydrant", icon: Droplets },
+  SPRINKLER_SYSTEM: { label: "Sprinkler System", icon: Waves },
+  FIRE_PUMP: { label: "Fire Pump", icon: Gauge },
+  FIRE_WATER_TANK: { label: "Fire Water Tank", icon: Fuel },
+  HOOTER: { label: "Hooter", icon: Siren },
 };
 
 const STATUS_STYLES = {
@@ -22,6 +17,12 @@ const STATUS_STYLES = {
   ALARM: "text-red-700 bg-red-50 border-red-200",
   FAULT: "text-red-700 bg-red-50 border-red-200",
   OFFLINE: "text-slate-600 bg-slate-50 border-slate-200",
+};
+
+const CRITICALITY_STYLES = {
+  HIGH: "text-red-700 bg-red-50 border-red-200",
+  MEDIUM: "text-amber-700 bg-amber-50 border-amber-200",
+  LOW: "text-slate-600 bg-slate-50 border-slate-200",
 };
 
 function StatusPill({ status }) {
@@ -38,157 +39,135 @@ function healthColor(h) {
   return "bg-red-500";
 }
 
-const MAINT_TYPE_STYLES = {
-  PREVENTIVE: "text-blue-700 bg-blue-50 border-blue-200",
-  CORRECTIVE: "text-red-700 bg-red-50 border-red-200",
-  PREDICTIVE: "text-purple-700 bg-purple-50 border-purple-200",
-};
+function timeAgo(iso) {
+  if (!iso) return "—";
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
 
-export default function FireAssetDetail() {
-  const { id } = useParams();
-  const [asset, setAsset] = useState(null);
-  const [history, setHistory] = useState([]);
-  const [maintenance, setMaintenance] = useState([]);
-  const [loading, setLoading] = useState(true);
+function metricSummary(asset) {
+  const m = asset.metrics || {};
+  if (asset.asset_type === "HYDRANT" || asset.asset_type === "FIRE_PUMP") return m.pressure_bar !== undefined ? `${m.pressure_bar} bar` : "—";
+  if (asset.asset_type === "FIRE_WATER_TANK") return m.level_pct !== undefined ? `${m.level_pct}%` : "—";
+  if (asset.asset_type === "SPRINKLER_SYSTEM") return `${m.zones_ready ?? 0}/${m.zones_total ?? 0} zones`;
+  if (asset.asset_type === "HOOTER") return asset.status === "ALARM" ? "Active" : "Standby";
+  return "—";
+}
 
-  useEffect(() => {
-    async function load() {
-      const [assetRes, historyRes, maintRes] = await Promise.all([
-        api.get(`/fire/assets/${id}`),
-        api.get(`/fire/assets/${id}/history`, { params: { limit: 60 } }),
-        api.get(`/fire/assets/${id}/maintenance`),
-      ]);
-      setAsset(assetRes.data);
-      setHistory(historyRes.data);
-      setMaintenance(maintRes.data);
-      setLoading(false);
-    }
-    load();
-  }, [id]);
-
-  if (loading || !asset) {
-    return (
-      <div className="space-y-4" data-testid="fire-asset-detail-page">
-        <div className="text-sm text-slate-500">Loading fire asset…</div>
-      </div>
-    );
-  }
-
+function FireAssetCard({ asset }) {
   const meta = TYPE_META[asset.asset_type] || TYPE_META.HYDRANT;
   const Icon = meta.icon;
-  const chartData = meta.metricKey
-    ? history.map((r) => ({
-        time: new Date(r.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-        value: r[meta.metricKey],
-      }))
-    : [];
 
   return (
-    <div className="space-y-4" data-testid="fire-asset-detail-page">
-      <Link to="/fire-safety/assets" className="inline-flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-700">
-        <ArrowLeft className="h-3.5 w-3.5" /> Back to Asset Status
-      </Link>
-
-      <div className="flex items-start justify-between">
-        <div>
-          <div className="flex items-center gap-2">
-            <div className="h-10 w-10 rounded-md bg-slate-50 border border-slate-100 grid place-items-center">
-              <Icon className="h-5 w-5 text-[color:var(--brand-navy)]" />
-            </div>
-            <div>
-              <h1 className="text-2xl font-display font-bold text-slate-900">{asset.asset_code} — {asset.name}</h1>
-              <p className="text-sm text-slate-500">{meta.label} · Criticality: {asset.criticality}</p>
-            </div>
+    <Link
+      to={`/fire-safety/assets/${asset.id}`}
+      data-testid={`fire-asset-card-${asset.asset_code}`}
+      className="group flex flex-col gap-3 rounded-lg border border-[color:var(--border)] bg-white p-4 transition hover:border-slate-300 hover:shadow-sm"
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-slate-50 border border-slate-100">
+            <Icon className="h-4 w-4 text-[color:var(--brand-navy)]" />
+          </div>
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-slate-900 truncate">{asset.asset_code}</div>
+            <div className="text-xs text-slate-500 truncate">{meta.label}</div>
           </div>
         </div>
         <StatusPill status={asset.status} />
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="bg-white rounded-lg border border-[color:var(--border)] p-4">
-          <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 mb-2">Health</div>
-          <div className="flex items-center gap-3">
-            <div className="flex-1 h-2.5 rounded-full bg-slate-100 overflow-hidden">
-              <div className={`h-full rounded-full ${healthColor(asset.health)}`} style={{ width: `${asset.health}%` }} />
-            </div>
-            <span className="font-mono font-bold text-slate-900">{asset.health}%</span>
-          </div>
+      <div>
+        <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
+          <span>Health</span>
+          <span className="font-medium text-slate-700">{asset.health}%</span>
         </div>
-
-        {meta.metricKey && (
-          <div className="bg-white rounded-lg border border-[color:var(--border)] p-4">
-            <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 mb-1">
-              {meta.metricKey === "pressure_bar" ? "Pressure" : "Level"}
-            </div>
-            <div className="text-2xl font-mono font-bold text-slate-900">
-              {asset.metrics?.[meta.metricKey] ?? "—"} <span className="text-sm text-slate-500">{meta.metricUnit}</span>
-            </div>
-          </div>
-        )}
-
-        <div className="bg-white rounded-lg border border-[color:var(--border)] p-4">
-          <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 mb-1 flex items-center gap-1">
-            <Clock className="h-3 w-3" /> Last Seen
-          </div>
-          <div className="text-sm font-medium text-slate-800">
-            {asset.last_seen ? new Date(asset.last_seen).toLocaleString() : "—"}
-          </div>
+        <div className="h-1.5 w-full rounded-full bg-slate-100 overflow-hidden">
+          <div className={`h-full rounded-full ${healthColor(asset.health)}`} style={{ width: `${Math.max(2, asset.health)}%` }} />
         </div>
       </div>
 
-      {chartData.length > 1 && (
-        <div className="bg-white rounded-lg border border-[color:var(--border)] p-5">
-          <div className="font-semibold text-sm text-slate-800 mb-3">
-            {meta.metricKey === "pressure_bar" ? "Pressure Trend" : "Level Trend"}
-          </div>
-          <div className="h-56">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData} margin={{ top: 4, right: 10, left: 0, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                <XAxis dataKey="time" tick={{ fontSize: 10 }} interval="preserveStartEnd" />
-                <YAxis tick={{ fontSize: 10 }} domain={["dataMin - 2", "dataMax + 2"]} />
-                <Tooltip contentStyle={{ fontSize: 12 }} />
-                <Line type="monotone" dataKey="value" stroke="#1e3a8a" strokeWidth={2} dot={false} />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      )}
+      <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-100">
+        <span className="font-medium text-slate-700">{metricSummary(asset)}</span>
+        {asset.criticality && (
+          <span className={`px-1.5 py-0.5 rounded border text-[10px] font-medium ${CRITICALITY_STYLES[asset.criticality] || CRITICALITY_STYLES.LOW}`}>
+            {asset.criticality}
+          </span>
+        )}
+      </div>
 
-      <div className="bg-white rounded-lg border border-[color:var(--border)] p-5">
-        <div className="flex items-center gap-2 mb-3">
-          <Wrench className="h-4 w-4 text-[color:var(--brand-navy)]" />
-          <span className="font-semibold text-sm text-slate-800">Maintenance History</span>
-        </div>
-        <table className="w-full text-sm" data-testid="fire-asset-maintenance-table">
-          <thead>
-            <tr className="text-left text-[11px] uppercase tracking-wider text-slate-500 border-b">
-              <th className="py-2 px-2 font-semibold">Date</th>
-              <th className="py-2 px-2 font-semibold">Type</th>
-              <th className="py-2 px-2 font-semibold">Description</th>
-              <th className="py-2 px-2 font-semibold">Technician</th>
-              <th className="py-2 px-2 font-semibold text-right">Cost</th>
-              <th className="py-2 px-2 font-semibold">Next Due</th>
-            </tr>
-          </thead>
-          <tbody>
-            {maintenance.map((m) => (
-              <tr key={m.id} className="border-b last:border-0">
-                <td className="py-2 px-2 text-slate-700">{new Date(m.performed_at).toLocaleDateString()}</td>
-                <td className="py-2 px-2">
-                  <span className={`px-1.5 py-0.5 rounded border text-[10px] font-medium ${MAINT_TYPE_STYLES[m.type] || MAINT_TYPE_STYLES.PREVENTIVE}`}>{m.type}</span>
-                </td>
-                <td className="py-2 px-2 text-slate-700">{m.description}</td>
-                <td className="py-2 px-2 text-slate-600">{m.technician}</td>
-                <td className="py-2 px-2 text-right font-mono">₹{m.cost_inr?.toLocaleString()}</td>
-                <td className="py-2 px-2 text-xs text-slate-500">{m.next_due_at ? new Date(m.next_due_at).toLocaleDateString() : "—"}</td>
-              </tr>
-            ))}
-            {maintenance.length === 0 && (
-              <tr><td colSpan={6} className="py-6 text-center text-sm text-slate-400">No maintenance records yet.</td></tr>
-            )}
-          </tbody>
-        </table>
+      <div className="flex items-center gap-1.5 text-xs text-slate-400">
+        <Clock className="h-3 w-3" />
+        <span>Last seen {timeAgo(asset.last_seen)}</span>
+      </div>
+    </Link>
+  );
+}
+
+export default function FireAssetStatus() {
+  const [data, setData] = useState(null);
+  const [typeFilter, setTypeFilter] = useState("all");
+
+  useEffect(() => {
+    api.get("/fire/assets/status-overview").then((r) => setData(r.data));
+  }, []);
+
+  if (!data) {
+    return (
+      <div className="space-y-4" data-testid="fire-asset-status-page">
+        <h1 className="text-2xl font-display font-bold text-slate-900">Fire Assets Dashboard</h1>
+        <div className="text-sm text-slate-500">Loading…</div>
+      </div>
+    );
+  }
+
+  const { total, by_status, by_type, assets } = data;
+  const visible = typeFilter === "all" ? assets : assets.filter((a) => a.asset_type === typeFilter);
+
+  return (
+    <div className="space-y-4" data-testid="fire-asset-status-page">
+      <div>
+        <h1 className="text-2xl font-display font-bold text-slate-900">Fire Assets Dashboard</h1>
+        <p className="text-sm text-slate-500">All fire & safety devices — hydrants, sprinklers, pumps, tanks and hooters — in one place.</p>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        {["NORMAL", "ATTENTION", "ALARM", "FAULT", "OFFLINE"].map((s) => (
+          <div key={s} className="bg-white rounded-lg border border-[color:var(--border)] p-4">
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">{s}</div>
+            <div className="mt-2 text-2xl font-mono font-bold tabular text-slate-900">{by_status[s] || 0}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="flex items-center gap-2 flex-wrap">
+        <button
+          onClick={() => setTypeFilter("all")}
+          className={`px-3 py-1.5 rounded-md text-xs font-medium border ${typeFilter === "all" ? "bg-[color:var(--brand-navy)] text-white border-[color:var(--brand-navy)]" : "border-slate-200 text-slate-600 hover:border-slate-300"}`}
+        >
+          All ({total})
+        </button>
+        {Object.entries(TYPE_META).map(([key, meta]) => (
+          <button
+            key={key}
+            onClick={() => setTypeFilter(key)}
+            className={`px-3 py-1.5 rounded-md text-xs font-medium border flex items-center gap-1 ${typeFilter === key ? "bg-[color:var(--brand-navy)] text-white border-[color:var(--brand-navy)]" : "border-slate-200 text-slate-600 hover:border-slate-300"}`}
+          >
+            <meta.icon className="h-3.5 w-3.5" /> {meta.label} ({by_type[key]?.count ?? 0})
+          </button>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+        {visible.map((a) => (
+          <FireAssetCard key={a.id} asset={a} />
+        ))}
+        {visible.length === 0 && <div className="text-sm text-slate-400 col-span-full">No fire assets for this filter.</div>}
       </div>
     </div>
   );

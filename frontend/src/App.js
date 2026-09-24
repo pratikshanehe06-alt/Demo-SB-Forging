@@ -2,6 +2,7 @@ import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-route
 import "@/App.css";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { PlantProvider } from "@/lib/plantContext";
+import { KioskProvider } from "@/lib/kioskContext";
 import { Toaster } from "@/components/ui/sonner";
 import Layout from "@/components/Layout";
 import LoginPage from "@/pages/Login";
@@ -12,7 +13,6 @@ import AssetHealthOverview from "@/pages/AssetHealthOverview";
 import AssetPredictiveMaintenance from "@/pages/AssetPredictiveMaintenance";
 import AlarmsPage from "@/pages/AlarmsPage";
 import Asset360 from "@/pages/Asset360";
-import AssetCompare from "@/pages/AssetCompare";
 import CXOBoard from "@/pages/CXOBoard";
 import OperatorRunbook from "@/pages/OperatorRunbook";
 import ModulesPage from "@/pages/ModulesPage";
@@ -72,6 +72,7 @@ export default function App() {
   return (
     <AuthProvider>
       <PlantProvider>
+        <KioskProvider>
         <BrowserRouter>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
@@ -83,7 +84,6 @@ export default function App() {
             <Route path="/assets/predictive" element={<Protected roles={["TENANT_ADMIN", "CXO", "PRODUCTION_MANAGER", "SUPERVISOR"]} requireModule="APM"><AssetPredictiveMaintenance /></Protected>} />
             <Route path="/assets/hierarchy" element={<Protected roles={["TENANT_ADMIN", "CXO", "PRODUCTION_MANAGER", "SUPERVISOR"]} requireModule="APM"><AssetHierarchy /></Protected>} />
             <Route path="/alarms" element={<Protected roles={["TENANT_ADMIN", "CXO", "PRODUCTION_MANAGER", "SUPERVISOR"]} requireModule="APM"><AlarmsPage /></Protected>} />
-            <Route path="/assets/compare" element={<Protected roles={["TENANT_ADMIN", "CXO", "PRODUCTION_MANAGER", "SUPERVISOR"]} requireModule="APM"><AssetCompare /></Protected>} />
             <Route path="/assets/:id" element={<Protected roles={["TENANT_ADMIN", "CXO", "PRODUCTION_MANAGER", "SUPERVISOR"]} requireModule="APM"><Asset360 /></Protected>} />
             <Route path="/eems" element={<Protected roles={["TENANT_ADMIN", "CXO", "PRODUCTION_MANAGER"]} requireModule="EEMS"><EEMSPage /></Protected>} />
             <Route path="/pqi" element={<Protected roles={["TENANT_ADMIN", "CXO", "PRODUCTION_MANAGER"]} requireModule="EEMS"><PQIPage /></Protected>} />
@@ -113,6 +113,7 @@ export default function App() {
           </Routes>
         </BrowserRouter>
         <Toaster richColors position="top-right" />
+        </KioskProvider>
       </PlantProvider>
     </AuthProvider>
   );

@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { useKiosk } from "@/lib/kioskContext";
 import {
   Boxes, Zap, Settings, Sun, Activity, Droplet, Flame, Package,
-  ClipboardCheck, UserCheck, IndianRupee, AlertTriangle,
+  ClipboardCheck, UserCheck, IndianRupee, AlertTriangle, Maximize2, Minimize2,
 } from "lucide-react";
 
 function fmtInr(n) {
@@ -95,6 +96,30 @@ function BarList({ items, max, color = "#1e3a8a" }) {
 
 export default function CXOBoard() {
   const { modules } = useAuth();
+  const { isKiosk, enterKiosk, exitKiosk } = useKiosk();
+  const containerRef = useRef(null);
+
+  async function toggleFullscreen() {
+    if (!isKiosk) {
+      enterKiosk();
+      try { await containerRef.current?.requestFullscreen?.(); } catch (e) { /* fullscreen API not available — kiosk mode still hides app chrome */ }
+    } else {
+      exitKiosk();
+      if (document.fullscreenElement) {
+        try { await document.exitFullscreen(); } catch (e) { /* ignore */ }
+      }
+    }
+  }
+
+  // If the user exits fullscreen via ESC or the browser's own control,
+  // make sure kiosk mode (sidebar/header hidden) exits in sync.
+  useEffect(() => {
+    function onFsChange() {
+      if (!document.fullscreenElement) exitKiosk();
+    }
+    document.addEventListener("fullscreenchange", onFsChange);
+    return () => document.removeEventListener("fullscreenchange", onFsChange);
+  }, [exitKiosk]);
   const [plants, setPlants] = useState([]);
   const [selectedPlantId, setSelectedPlantId] = useState("all");
   const [loading, setLoading] = useState(true);
@@ -139,25 +164,30 @@ export default function CXOBoard() {
   const d = data.dashboard;
 
   return (
-    <div className="space-y-4" data-testid="cxo-board-page">
+    <div
+      ref={containerRef}
+      data-testid="cxo-board-page"
+      className={isKiosk ? "h-screen w-screen overflow-y-auto bg-[var(--workspace)] p-4 space-y-3" : "space-y-4"}
+    >
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-display font-bold text-slate-900">CXO Overview</h1>
-          <p className="text-sm text-slate-500">All plants, all modules — one glance.</p>
+          <h1 className={isKiosk ? "text-xl font-display font-bold text-slate-900" : "text-2xl font-display font-bold text-slate-900"}>CXO Overview</h1>
+          {!isKiosk && <p className="text-sm text-slate-500">All plants, all modules — one glance.</p>}
         </div>
-        {plants.length > 0 && (
-          <div className="flex items-center gap-1 rounded-md border border-[color:var(--border)] bg-white p-0.5">
-            <button
-              onClick={() => setSelectedPlantId("all")}
-              data-testid="cxo-plant-tab-all"
-              className={`px-3 py-1.5 rounded text-xs font-medium transition ${selectedPlantId === "all" ? "bg-[color:var(--brand-navy)] text-white" : "text-slate-500 hover:text-slate-700"}`}
-            >
-              All Plants
-            </button>
-            {plants.map((p) => (
+        <div className="flex items-center gap-2">
+          {plants.length > 0 && (
+            <div className="flex items-center gap-1 rounded-md border border-[color:var(--border)] bg-white p-0.5">
               <button
-                key={p.id}
-                onClick={() => setSelectedPlantId(p.id)}
+                onClick={() => setSelectedPlantId("all")}
+                data-testid="cxo-plant-tab-all"
+                className={`px-3 py-1.5 rounded text-xs font-medium transition ${selectedPlantId === "all" ? "bg-[color:var(--brand-navy)] text-white" : "text-slate-500 hover:text-slate-700"}`}
+              >
+                All Plants
+              </button>
+              {plants.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => setSelectedPlantId(p.id)}
                 data-testid={`cxo-plant-tab-${p.code}`}
                 className={`px-3 py-1.5 rounded text-xs font-medium transition ${selectedPlantId === p.id ? "bg-[color:var(--brand-navy)] text-white" : "text-slate-500 hover:text-slate-700"}`}
               >
@@ -165,13 +195,26 @@ export default function CXOBoard() {
               </button>
             ))}
           </div>
-        )}
+          )}
+          <button
+            onClick={toggleFullscreen}
+            data-testid="cxo-fullscreen-toggle"
+            title={isKiosk ? "Exit full screen" : "Full screen"}
+            className={
+              isKiosk
+                ? "h-9 w-9 grid place-items-center rounded-md border border-[color:var(--border)] bg-white text-slate-600 hover:text-slate-900"
+                : "h-9 w-9 grid place-items-center rounded-md border border-[color:var(--border)] bg-white text-slate-500 hover:text-slate-800"
+            }
+          >
+            {isKiosk ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+          </button>
+        </div>
       </div>
 
       {loading || !d ? (
         <div className="text-sm text-slate-500 py-8 text-center">Loading overview…</div>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className={isKiosk ? "grid grid-cols-1 lg:grid-cols-3 gap-3" : "grid grid-cols-1 lg:grid-cols-3 gap-4"}>
 
           {/* ---- APM: detailed, with charts ---- */}
           {modules?.APM !== false && (

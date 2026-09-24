@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useParams, useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useTelemetryStream } from "@/lib/ws";
@@ -17,6 +17,7 @@ import { motion, AnimatePresence } from "framer-motion";
 
 export default function Asset360() {
   const { id } = useParams();
+  const navigate = useNavigate();
   const { token } = useAuth();
   const [asset, setAsset] = useState(null);
   const [metrics, setMetrics] = useState(null);
@@ -91,7 +92,14 @@ export default function Asset360() {
     <div className="space-y-5" data-testid="asset-360-page">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <Link to="/assets" className="text-slate-500 hover:text-slate-800"><ArrowLeft className="h-5 w-5" /></Link>
+          <button
+            onClick={() => navigate(-1)}
+            data-testid="asset-360-back"
+            className="text-slate-500 hover:text-slate-800"
+            aria-label="Back"
+          >
+            <ArrowLeft className="h-5 w-5" />
+          </button>
           <div>
             <div className="flex items-center gap-3">
               <h1 className="text-2xl font-display font-bold text-slate-900">{asset.asset_code}</h1>
