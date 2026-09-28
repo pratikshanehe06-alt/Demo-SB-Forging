@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
+import { useLiveTick } from "@/lib/ws";
 import { usePlant } from "@/lib/plantContext";
 import { Plus, MoreHorizontal, GitCompareArrows } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -24,18 +25,21 @@ export default function AssetListPage() {
   const [openAdd, setOpenAdd] = useState(false);
   const { params: plantParams, selectedPlantId } = usePlant();
   const navigate = useNavigate();
+  const liveTick = useLiveTick();
 
-  async function load() {
+  async function load(resetPage = true) {
     const params = { ...plantParams };
     if (filters.area_id !== "all") params.area_id = filters.area_id;
     if (filters.asset_type !== "all") params.asset_type = filters.asset_type;
     if (filters.status !== "all") params.status = filters.status;
     const { data } = await api.get("/assets", { params });
     setAssets(data);
-    setPage(1);
+    if (resetPage) setPage(1);
   }
 
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [filters, selectedPlantId]);
+  // Live refresh from Node-RED telemetry — keep the current page.
+  useEffect(() => { if (liveTick) load(false); /* eslint-disable-next-line */ }, [liveTick]);
   useEffect(() => { api.get("/areas").then((r) => setAreas(r.data)); }, []);
 
   const assetTypes = useMemo(() => Array.from(new Set(assets.map((a) => a.asset_type))), [assets]);

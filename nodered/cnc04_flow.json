@@ -1,0 +1,295 @@
+[
+    {
+        "id": "cnc04_tab",
+        "type": "tab",
+        "label": "CNC-04 Telemetry Simulator",
+        "disabled": false,
+        "info": ""
+    },
+    {
+        "id": "cnc04_inject",
+        "type": "inject",
+        "z": "cnc04_tab",
+        "name": "Every 5s",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "5",
+        "crontab": "",
+        "once": true,
+        "onceDelay": "1",
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 160,
+        "y": 80,
+        "wires": [
+            [
+                "cnc04_function"
+            ]
+        ]
+    },
+    {
+        "id": "cnc04_reset",
+        "type": "inject",
+        "z": "cnc04_tab",
+        "name": "Reset",
+        "props": [
+            {
+                "p": "reset",
+                "v": "true",
+                "vt": "bool"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 160,
+        "y": 140,
+        "wires": [
+            [
+                "cnc04_function"
+            ]
+        ]
+    },
+    {
+        "id": "cnc04_t62",
+        "type": "inject",
+        "z": "cnc04_tab",
+        "name": "Temp 62 (normal)",
+        "props": [
+            {
+                "p": "override",
+                "v": "{\"temperature\":62}",
+                "vt": "json"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 160,
+        "y": 200,
+        "wires": [
+            [
+                "cnc04_function"
+            ]
+        ]
+    },
+    {
+        "id": "cnc04_t95",
+        "type": "inject",
+        "z": "cnc04_tab",
+        "name": "Temp 95 (WARNING)",
+        "props": [
+            {
+                "p": "override",
+                "v": "{\"temperature\":95}",
+                "vt": "json"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 160,
+        "y": 260,
+        "wires": [
+            [
+                "cnc04_function"
+            ]
+        ]
+    },
+    {
+        "id": "cnc04_t105",
+        "type": "inject",
+        "z": "cnc04_tab",
+        "name": "Temp 105 (CRITICAL)",
+        "props": [
+            {
+                "p": "override",
+                "v": "{\"temperature\":105}",
+                "vt": "json"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 160,
+        "y": 320,
+        "wires": [
+            [
+                "cnc04_function"
+            ]
+        ]
+    },
+    {
+        "id": "cnc04_vib10",
+        "type": "inject",
+        "z": "cnc04_tab",
+        "name": "Vibration 10 (WARNING)",
+        "props": [
+            {
+                "p": "override",
+                "v": "{\"vibration\":10}",
+                "vt": "json"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 160,
+        "y": 380,
+        "wires": [
+            [
+                "cnc04_function"
+            ]
+        ]
+    },
+    {
+        "id": "cnc04_stop",
+        "type": "inject",
+        "z": "cnc04_tab",
+        "name": "Stop",
+        "props": [
+            {
+                "p": "override",
+                "v": "{\"machine_status\":\"STOPPED\"}",
+                "vt": "json"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 160,
+        "y": 440,
+        "wires": [
+            [
+                "cnc04_function"
+            ]
+        ]
+    },
+    {
+        "id": "cnc04_start",
+        "type": "inject",
+        "z": "cnc04_tab",
+        "name": "Start",
+        "props": [
+            {
+                "p": "override",
+                "v": "{\"machine_status\":\"RUNNING\",\"rpm\":1400,\"power\":8.2,\"current\":11.8}",
+                "vt": "json"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 160,
+        "y": 500,
+        "wires": [
+            [
+                "cnc04_function"
+            ]
+        ]
+    },
+    {
+        "id": "cnc04_fault",
+        "type": "inject",
+        "z": "cnc04_tab",
+        "name": "Fault (alarm)",
+        "props": [
+            {
+                "p": "override",
+                "v": "{\"machine_status\":\"FAULT\"}",
+                "vt": "json"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 160,
+        "y": 560,
+        "wires": [
+            [
+                "cnc04_function"
+            ]
+        ]
+    },
+    {
+        "id": "cnc04_function",
+        "type": "function",
+        "z": "cnc04_tab",
+        "name": "Build CNC-04 payload",
+        "func": "// ============================================================================\n// CNC-04 simulator — paste into a Node-RED \"function\" node.\n// Wiring:  [inject every 5s] ─┐\n//          [inject: Reset]  ──┼─► [this function] ─► [http request POST] ─► [debug]\n//          [inject: Temp 95] ─┘\n//\n// http request node: Method = POST, URL = http://localhost:8000/api/telemetry/ingest,\n//                    Return = a parsed JSON object. Leave its Headers list empty\n//                    (headers come from msg.headers below).\n//\n// Controls (set on an inject node):\n//   msg.reset    = true                               -> restart from DEFAULTS\n//   msg.override = {\"temperature\":95}                 -> set & HOLD temperature at ~95\n//   msg.override = {\"machine_status\":\"STOPPED\"}       -> stop the machine\n//   msg.override = {\"machine_status\":\"RUNNING\",\"temperature\":60}  -> recover\n// ============================================================================\n\nconst ASSET_CODE = \"CNC-04\";\nconst INGEST_KEY = \"8d2fd7f45f224f766af0b8bb4ae6edc00d779e4472a946a4\"; // from backend/.env\nconst STATE_KEY  = \"cnc04_state\";\nconst INTERVAL_S = 5;          // must match the repeating inject interval\nconst FAULT_CHANCE = 0.05;     // 5% chance per tick to fault while RUNNING\nconst RECOVER_CHANCE = 0.2;    // 20% chance per tick to recover from FAULT\nconst AUTO_FAULTS = false;     // set false to only fault via overrides\n\nconst DEFAULTS = {\n    temperature: 62.0,     // normal. Server rules: >85 WARNING, >100 CRITICAL\n    vibration: 2.5,        // >8 WARNING, >12 CRITICAL\n    pressure: 5.0,\n    rpm: 1400,\n    voltage: 415,\n    current: 11.8,\n    power: 8.2,\n    energy: 100.0,\n    production_count: 500,\n    good_count: 485,\n    reject_count: 15,\n    machine_status: \"RUNNING\"\n};\n\n// ---- load state (reset / override) ----------------------------------------\nlet state = (msg.reset ? null : flow.get(STATE_KEY)) || { ...DEFAULTS };\n\nif (msg.override && typeof msg.override === \"object\") {\n    Object.assign(state, msg.override);\n    // Overridden temperature/vibration become the new target, so they hold\n    // (with small jitter) instead of drifting back to the defaults.\n    if (msg.override.temperature !== undefined) state.target_temperature = Number(msg.override.temperature);\n    if (msg.override.vibration !== undefined) state.target_vibration = Number(msg.override.vibration);\n    if (state.machine_status) state.machine_status = String(state.machine_status).toUpperCase();\n}\nconst isManual = Boolean(msg.reset || msg.override);\n\n// ---- helpers ---------------------------------------------------------------\nconst jitter = (val, delta) => val + (Math.random() * 2 - 1) * delta;\nconst clamp  = (v, lo, hi) => Math.min(hi, Math.max(lo, v));\nconst r2     = (v) => Math.round(v * 100) / 100;\n\n// ---- random fault / recovery (only on timer ticks, not manual pushes) -----\nif (!isManual && AUTO_FAULTS) {\n    if (state.machine_status === \"RUNNING\" && Math.random() < FAULT_CHANCE) {\n        state.machine_status = \"FAULT\";\n    } else if (state.machine_status === \"FAULT\" && Math.random() < RECOVER_CHANCE) {\n        state.machine_status = \"RUNNING\";\n        state.temperature = (state.target_temperature ?? DEFAULTS.temperature) + Math.random() * 3;\n        state.vibration = (state.target_vibration ?? DEFAULTS.vibration) + Math.random() * 0.5;\n    }\n}\n\n// ---- physics ---------------------------------------------------------------\nif (!isManual) {\n    if (state.machine_status === \"RUNNING\") {\n        // drift toward target (your override, else the default) so values don't random-walk\n        const tT = state.target_temperature ?? DEFAULTS.temperature;\n        const tV = state.target_vibration ?? DEFAULTS.vibration;\n        state.temperature += (tT - state.temperature) * 0.2;\n        state.vibration   += (tV - state.vibration) * 0.2;\n\n        state.temperature = clamp(jitter(state.temperature, 0.6), 20, 150);\n        state.vibration   = clamp(jitter(state.vibration, 0.25), 0.1, 20);\n        state.rpm         = clamp(jitter(state.rpm || DEFAULTS.rpm, 15), 1200, 1600);\n        state.voltage     = jitter(415, 2);\n        state.current     = Math.max(5, jitter(state.current, 0.3));\n        state.power       = Math.max(4, jitter(state.power, 0.4));\n        state.pressure    = Math.max(1, jitter(state.pressure, 0.15));\n        state.energy     += state.power / 3600 * INTERVAL_S;\n\n        if (Math.random() < 0.5) {\n            state.production_count += 1;\n            if (Math.random() > 0.05) state.good_count += 1;\n            else state.reject_count += 1;\n        }\n    } else if (state.machine_status === \"FAULT\") {\n        state.temperature = Math.min(110, state.temperature + 1.5);\n        state.vibration   = Math.min(15, state.vibration + 0.5);\n        state.rpm         = Math.max(0, state.rpm - 200);\n        state.power       = Math.max(0.5, state.power * 0.7);\n    } else {\n        // STOPPED / IDLE: machine cools down, spindle stops\n        state.temperature += (30 - state.temperature) * 0.05;\n        state.vibration   = Math.max(0.1, state.vibration * 0.8);\n        state.rpm         = 0;\n        state.power       = state.machine_status === \"IDLE\" ? 1.2 : 0;\n        state.current     = state.machine_status === \"IDLE\" ? 2.0 : 0;\n    }\n}\n\n// Raise an alarm only on the tick the machine enters FAULT (not every 5s).\nconst justFaulted = state.machine_status === \"FAULT\" && state._prev_status !== \"FAULT\";\nstate._prev_status = state.machine_status;\n\nflow.set(STATE_KEY, state);\nnode.status({\n    fill: state.machine_status === \"RUNNING\" ? \"green\" : state.machine_status === \"FAULT\" ? \"red\" : \"grey\",\n    shape: \"dot\",\n    text: `${state.machine_status} · ${r2(state.temperature)}°C · ${r2(state.vibration)} mm/s`\n});\n\n// ---- payload ---------------------------------------------------------------\nconst payload = {\n    asset_code: ASSET_CODE,\n    machine_status: state.machine_status,\n    temperature: r2(state.temperature),\n    vibration: r2(state.vibration),\n    pressure: r2(state.pressure),\n    rpm: Math.round(state.rpm),\n    voltage: Math.round(state.voltage * 10) / 10,\n    current: r2(state.current),\n    power: r2(state.power),\n    energy: r2(state.energy),\n    production_count: state.production_count,\n    good_count: state.good_count,\n    reject_count: state.reject_count,\n    alarm: justFaulted\n};\nif (payload.alarm) payload.alarm_message = `Simulated fault on ${ASSET_CODE}`;\n\nmsg.payload = payload;\nmsg.headers = {\n    \"Content-Type\": \"application/json\",\n    \"X-Ingest-Key\": INGEST_KEY\n};\ndelete msg.reset;\ndelete msg.override;\nreturn msg;\n",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 440,
+        "y": 300,
+        "wires": [
+            [
+                "cnc04_http"
+            ]
+        ]
+    },
+    {
+        "id": "cnc04_http",
+        "type": "http request",
+        "z": "cnc04_tab",
+        "name": "POST /api/telemetry/ingest",
+        "method": "POST",
+        "ret": "obj",
+        "paytoqs": "ignore",
+        "url": "http://localhost:8000/api/telemetry/ingest",
+        "tls": "",
+        "persist": false,
+        "proxy": "",
+        "insecureHTTPParser": false,
+        "authType": "",
+        "senderr": false,
+        "headers": [],
+        "x": 700,
+        "y": 300,
+        "wires": [
+            [
+                "cnc04_debug"
+            ]
+        ]
+    },
+    {
+        "id": "cnc04_debug",
+        "type": "debug",
+        "z": "cnc04_tab",
+        "name": "Response",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 920,
+        "y": 300,
+        "wires": []
+    }
+]

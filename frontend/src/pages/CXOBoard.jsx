@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
+import { useLiveTick } from "@/lib/ws";
 import { useAuth } from "@/lib/auth";
 import { useKiosk } from "@/lib/kioskContext";
 import {
@@ -124,14 +125,19 @@ export default function CXOBoard() {
   const [selectedPlantId, setSelectedPlantId] = useState("all");
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState({});
+  const liveTick = useLiveTick();
+  const liveTickRef = useRef(liveTick);
 
   useEffect(() => {
     api.get("/plants").then((r) => setPlants(r.data));
   }, []);
 
   useEffect(() => {
+    // Live refreshes update silently; only plant/module changes show the loader.
+    const isLiveRefresh = liveTickRef.current !== liveTick;
+    liveTickRef.current = liveTick;
     async function load() {
-      setLoading(true);
+      if (!isLiveRefresh) setLoading(true);
       const pid = selectedPlantId === "all" ? undefined : selectedPlantId;
       const params = pid ? { plant_id: pid } : {};
 
@@ -159,7 +165,7 @@ export default function CXOBoard() {
       setLoading(false);
     }
     load();
-  }, [selectedPlantId, modules]);
+  }, [selectedPlantId, modules, liveTick]);
 
   const d = data.dashboard;
 

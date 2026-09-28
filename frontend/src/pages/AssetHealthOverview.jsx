@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
+import { useLiveTick } from "@/lib/ws";
 import { HeartPulse, AlertCircle } from "lucide-react";
 
 function healthColor(h) {
@@ -40,14 +41,15 @@ export default function AssetHealthOverview() {
   const [summary, setSummary] = useState(null);
   const [assets, setAssets] = useState([]);
   const [loading, setLoading] = useState(true);
+  const liveTick = useLiveTick();
 
   useEffect(() => {
     Promise.all([api.get("/dashboard/summary"), api.get("/assets")]).then(([s, a]) => {
       setSummary(s.data);
       setAssets(a.data);
       setLoading(false);
-    });
-  }, []);
+    }).catch(() => {});
+  }, [liveTick]);
 
   if (loading || !summary) {
     return (

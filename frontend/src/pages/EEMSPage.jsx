@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { useLiveTick } from "@/lib/ws";
 import { usePlant } from "@/lib/plantContext";
 import {
   Zap, DollarSign, Leaf, TrendingUp, Activity, Sun, BatteryCharging
@@ -21,17 +22,18 @@ export default function EEMSPage() {
   const { params, selectedPlantId } = usePlant();
   const [range, setRange] = useState("7d");
   const [data, setData] = useState(null);
+  const liveTick = useLiveTick();
 
   useEffect(() => {
     async function load() {
       try {
         const { data } = await api.get("/energy/summary", { params: { ...params, range } });
         setData(data);
-      } catch (_) { setData(null); }
+      } catch (_) { /* keep last good data */ }
     }
     load();
     // eslint-disable-next-line
-  }, [range, selectedPlantId]);
+  }, [range, selectedPlantId, liveTick]);
 
   if (!data) return <div className="text-slate-500">Loading energy data…</div>;
   const k = data.kpis;

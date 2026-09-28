@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { useLiveTick } from "@/lib/ws";
 import { usePlant } from "@/lib/plantContext";
 import { StatusPill, SeverityBadge } from "@/components/Pills";
 import {
@@ -22,20 +23,22 @@ const KPI_META = [
 export default function Dashboard() {
   const [data, setData] = useState(null);
   const { params, selectedPlantId } = usePlant();
+  const liveTick = useLiveTick();
 
   useEffect(() => {
     let t;
+    let cancelled = false;
     async function load() {
       try {
         const { data } = await api.get("/dashboard/summary", { params });
-        setData(data);
+        if (!cancelled) setData(data);
       } catch (_) { /* ignore */ }
-      t = setTimeout(load, 15000);
+      if (!cancelled) t = setTimeout(load, 15000);
     }
     load();
-    return () => clearTimeout(t);
+    return () => { cancelled = true; clearTimeout(t); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedPlantId]);
+  }, [selectedPlantId, liveTick]);
 
   if (!data) {
     return <div className="text-slate-500">Loading dashboard…</div>;

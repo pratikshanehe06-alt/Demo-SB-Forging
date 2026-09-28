@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
+import { useLiveTick } from "@/lib/ws";
 import { ChevronDown, ChevronRight, Factory, Layers, Cpu, LayoutGrid, List as ListIcon } from "lucide-react";
 
 function timeAgo(iso) {
@@ -183,6 +184,9 @@ export default function AssetHierarchyPage() {
     window.localStorage.setItem("asset_hierarchy_view", viewMode);
   }, [viewMode]);
 
+  const liveTick = useLiveTick();
+
+  // Re-runs on live Node-RED updates (liveTick); expand/collapse state is kept.
   useEffect(() => {
     api.get("/assets/hierarchy").then((r) => {
       setTree(r.data);
@@ -191,8 +195,8 @@ export default function AssetHierarchyPage() {
         init[p.id] = true;
         p.areas.forEach((a) => (init[a.id] = true));
       });
-      setExpanded(init);
-    });
+      setExpanded((prev) => (Object.keys(prev).length ? prev : init));
+    }).catch(() => {});
 
     // Full asset details (health, criticality, last_seen) keyed by id
     api.get("/assets").then((r) => {
@@ -217,8 +221,8 @@ export default function AssetHierarchyPage() {
     // Running hours, downtime, production totals, maintenance ETA — bulk in one call
     api.get("/assets/overview-metrics").then((r) => {
       setOverviewMetrics(r.data);
-    });
-  }, []);
+    }).catch(() => {});
+  }, [liveTick]);
 
   function toggle(id) { setExpanded((e) => ({ ...e, [id]: !e[id] })); }
 

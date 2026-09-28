@@ -3,6 +3,7 @@ import "@/App.css";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { PlantProvider } from "@/lib/plantContext";
 import { KioskProvider } from "@/lib/kioskContext";
+import { TelemetryProvider } from "@/lib/ws";
 import { Toaster } from "@/components/ui/sonner";
 import Layout from "@/components/Layout";
 import LoginPage from "@/pages/Login";
@@ -71,6 +72,7 @@ function RoleHome() {
 export default function App() {
   return (
     <AuthProvider>
+      <TelemetryProvider>
       <PlantProvider>
         <KioskProvider>
         <BrowserRouter>
@@ -115,6 +117,7 @@ export default function App() {
         <Toaster richColors position="top-right" />
         </KioskProvider>
       </PlantProvider>
+      </TelemetryProvider>
     </AuthProvider>
   );
 }

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { useLiveTick } from "@/lib/ws";
 import { usePlant } from "@/lib/plantContext";
 import {
   BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip,
@@ -16,17 +17,18 @@ export default function OEEPage() {
   const { params, selectedPlantId } = usePlant();
   const [days, setDays] = useState(7);
   const [data, setData] = useState(null);
+  const liveTick = useLiveTick();
 
   useEffect(() => {
     async function load() {
       try {
         const { data } = await api.get("/oee/summary", { params: { ...params, days } });
         setData(data);
-      } catch (_) { setData(null); }
+      } catch (_) { /* keep last good data */ }
     }
     load();
     // eslint-disable-next-line
-  }, [days, selectedPlantId]);
+  }, [days, selectedPlantId, liveTick]);
 
   if (!data) return <div className="text-slate-500">Loading OEE…</div>;
 

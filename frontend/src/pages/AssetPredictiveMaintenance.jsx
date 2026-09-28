@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
+import { useLiveTick } from "@/lib/ws";
 import { Wrench, TrendingDown, CalendarClock, AlertTriangle } from "lucide-react";
 
 function KpiCard({ icon: Icon, label, value, sub, color = "text-[color:var(--brand-navy)]" }) {
@@ -19,13 +20,14 @@ function KpiCard({ icon: Icon, label, value, sub, color = "text-[color:var(--bra
 export default function AssetPredictiveMaintenance() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const liveTick = useLiveTick();
 
   useEffect(() => {
     api.get("/assets/predictive-overview").then((r) => {
       setData(r.data);
       setLoading(false);
-    });
-  }, []);
+    }).catch(() => {});
+  }, [liveTick]);
 
   if (loading || !data) {
     return (
