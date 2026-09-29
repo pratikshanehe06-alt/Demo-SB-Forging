@@ -76,7 +76,7 @@ export function useTelemetryStream(_token) {
  * Also bumps on a fallback interval so pages still refresh if the socket drops.
  */
 export function useLiveTick({
-  types = ["telemetry", "escalation", "alarm"],
+  types = ["telemetry", "fire_telemetry", "escalation", "alarm"],
   throttleMs = 5000,
   fallbackMs = 30000,
 } = {}) {

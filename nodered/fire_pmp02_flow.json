@@ -1,0 +1,320 @@
+[
+  {
+    "id": "fire_pmp02_tab",
+    "type": "tab",
+    "label": "Fire Pump PMP-02 Simulator",
+    "disabled": false,
+    "info": ""
+  },
+  {
+    "id": "fp_tick",
+    "type": "inject",
+    "z": "fire_pmp02_tab",
+    "name": "Every 5s",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "5",
+    "crontab": "",
+    "once": true,
+    "onceDelay": "1",
+    "topic": "",
+    "payload": "",
+    "payloadType": "date",
+    "x": 170,
+    "y": 80,
+    "wires": [
+      [
+        "fp_function"
+      ]
+    ]
+  },
+  {
+    "id": "fp_reset",
+    "type": "inject",
+    "z": "fire_pmp02_tab",
+    "name": "Reset",
+    "props": [
+      {
+        "p": "reset",
+        "v": "true",
+        "vt": "bool"
+      }
+    ],
+    "repeat": "",
+    "crontab": "",
+    "once": false,
+    "onceDelay": 0.1,
+    "topic": "",
+    "x": 170,
+    "y": 140,
+    "wires": [
+      [
+        "fp_function"
+      ]
+    ]
+  },
+  {
+    "id": "fp_start",
+    "type": "inject",
+    "z": "fire_pmp02_tab",
+    "name": "Start pump",
+    "props": [
+      {
+        "p": "override",
+        "v": "{\"running\":true}",
+        "vt": "json"
+      }
+    ],
+    "repeat": "",
+    "crontab": "",
+    "once": false,
+    "onceDelay": 0.1,
+    "topic": "",
+    "x": 170,
+    "y": 200,
+    "wires": [
+      [
+        "fp_function"
+      ]
+    ]
+  },
+  {
+    "id": "fp_stop",
+    "type": "inject",
+    "z": "fire_pmp02_tab",
+    "name": "Stop pump",
+    "props": [
+      {
+        "p": "override",
+        "v": "{\"running\":false}",
+        "vt": "json"
+      }
+    ],
+    "repeat": "",
+    "crontab": "",
+    "once": false,
+    "onceDelay": 0.1,
+    "topic": "",
+    "x": 170,
+    "y": 260,
+    "wires": [
+      [
+        "fp_function"
+      ]
+    ]
+  },
+  {
+    "id": "fp_p71",
+    "type": "inject",
+    "z": "fire_pmp02_tab",
+    "name": "Pressure 7.1 (normal)",
+    "props": [
+      {
+        "p": "override",
+        "v": "{\"pressure_bar\":7.1}",
+        "vt": "json"
+      }
+    ],
+    "repeat": "",
+    "crontab": "",
+    "once": false,
+    "onceDelay": 0.1,
+    "topic": "",
+    "x": 170,
+    "y": 320,
+    "wires": [
+      [
+        "fp_function"
+      ]
+    ]
+  },
+  {
+    "id": "fp_p42",
+    "type": "inject",
+    "z": "fire_pmp02_tab",
+    "name": "Pressure 4.2 (ATTENTION)",
+    "props": [
+      {
+        "p": "override",
+        "v": "{\"pressure_bar\":4.2}",
+        "vt": "json"
+      }
+    ],
+    "repeat": "",
+    "crontab": "",
+    "once": false,
+    "onceDelay": 0.1,
+    "topic": "",
+    "x": 170,
+    "y": 380,
+    "wires": [
+      [
+        "fp_function"
+      ]
+    ]
+  },
+  {
+    "id": "fp_p25",
+    "type": "inject",
+    "z": "fire_pmp02_tab",
+    "name": "Pressure 2.5 (ALARM)",
+    "props": [
+      {
+        "p": "override",
+        "v": "{\"pressure_bar\":2.5}",
+        "vt": "json"
+      }
+    ],
+    "repeat": "",
+    "crontab": "",
+    "once": false,
+    "onceDelay": 0.1,
+    "topic": "",
+    "x": 170,
+    "y": 440,
+    "wires": [
+      [
+        "fp_function"
+      ]
+    ]
+  },
+  {
+    "id": "fp_t60",
+    "type": "inject",
+    "z": "fire_pmp02_tab",
+    "name": "Motor temp 60 (normal)",
+    "props": [
+      {
+        "p": "override",
+        "v": "{\"motor_temp_c\":60}",
+        "vt": "json"
+      }
+    ],
+    "repeat": "",
+    "crontab": "",
+    "once": false,
+    "onceDelay": 0.1,
+    "topic": "",
+    "x": 170,
+    "y": 500,
+    "wires": [
+      [
+        "fp_function"
+      ]
+    ]
+  },
+  {
+    "id": "fp_t85",
+    "type": "inject",
+    "z": "fire_pmp02_tab",
+    "name": "Motor temp 85 (ATTENTION)",
+    "props": [
+      {
+        "p": "override",
+        "v": "{\"motor_temp_c\":85}",
+        "vt": "json"
+      }
+    ],
+    "repeat": "",
+    "crontab": "",
+    "once": false,
+    "onceDelay": 0.1,
+    "topic": "",
+    "x": 170,
+    "y": 560,
+    "wires": [
+      [
+        "fp_function"
+      ]
+    ]
+  },
+  {
+    "id": "fp_t98",
+    "type": "inject",
+    "z": "fire_pmp02_tab",
+    "name": "Motor temp 98 (FAULT)",
+    "props": [
+      {
+        "p": "override",
+        "v": "{\"motor_temp_c\":98}",
+        "vt": "json"
+      }
+    ],
+    "repeat": "",
+    "crontab": "",
+    "once": false,
+    "onceDelay": 0.1,
+    "topic": "",
+    "x": 170,
+    "y": 620,
+    "wires": [
+      [
+        "fp_function"
+      ]
+    ]
+  },
+  {
+    "id": "fp_function",
+    "type": "function",
+    "z": "fire_pmp02_tab",
+    "name": "Build PMP-02 payload",
+    "func": "// ============================================================================\n// Fire pump simulator (Main Pump 1 / PMP-02) — Node-RED \"function\" node.\n// Posts to POST http://localhost:8000/api/fire/telemetry/ingest\n//\n// Server rules (backend/server.py _derive_fire_status):\n//   pressure_bar < 5  -> ATTENTION      pressure_bar < 3  -> ALARM (+ fire alarm event)\n//   motor_temp_c > 80 -> ATTENTION      motor_temp_c > 95 -> FAULT (+ fire alarm event)\n//   Health recovers when readings go back to normal.\n//\n// Controls (inject nodes):\n//   msg.reset    = true                          -> back to DEFAULTS\n//   msg.override = {\"pressure_bar\":4.2}          -> set & HOLD pressure (~4.2)\n//   msg.override = {\"motor_temp_c\":98}           -> set & HOLD motor temperature\n//   msg.override = {\"running\":true}              -> start pump (flow, current, rpm rise)\n//   msg.override = {\"running\":false}             -> stop pump\n// ============================================================================\n\nconst ASSET_CODE = \"PMP-02\";                 // change to target another fire asset\nconst INGEST_KEY = \"8d2fd7f45f224f766af0b8bb4ae6edc00d779e4472a946a4\"; // backend/.env\nconst STATE_KEY  = \"fire_pmp02_state\";\nconst INTERVAL_S = 5;\n\nconst DEFAULTS = {\n    running: false,        // main pumps sit on standby until demand\n    pressure_bar: 7.1,     // line pressure held by the jockey pump\n    motor_temp_c: 38,\n    flow_lpm: 0,\n    current_a: 0,\n    rpm: 0,\n    runtime_min_today: 0\n};\n\nlet state = (msg.reset ? null : flow.get(STATE_KEY)) || { ...DEFAULTS, _runtime_s: 0 };\n\nif (msg.override && typeof msg.override === \"object\") {\n    Object.assign(state, msg.override);\n    if (msg.override.pressure_bar !== undefined) state.target_pressure = Number(msg.override.pressure_bar);\n    if (msg.override.motor_temp_c !== undefined) state.target_temp = Number(msg.override.motor_temp_c);\n}\nconst isManual = Boolean(msg.reset || msg.override);\n\nconst jitter = (v, d) => v + (Math.random() * 2 - 1) * d;\nconst r = (v, n = 2) => Math.round(v * 10 ** n) / 10 ** n;\n\nif (!isManual) {\n    const running = Boolean(state.running);\n    const tP = state.target_pressure ?? (running ? 7.8 : DEFAULTS.pressure_bar);\n    const tT = state.target_temp ?? (running ? 62 : DEFAULTS.motor_temp_c);\n    state.pressure_bar += (tP - state.pressure_bar) * 0.3;\n    state.motor_temp_c += (tT - state.motor_temp_c) * 0.15;\n    state.pressure_bar = Math.max(0, jitter(state.pressure_bar, 0.05));\n    state.motor_temp_c = jitter(state.motor_temp_c, 0.3);\n\n    if (running) {\n        state.rpm       = jitter(2950, 10);\n        state.flow_lpm  = Math.max(0, jitter(1200, 25));\n        state.current_a = Math.max(0, jitter(88, 1.5));\n        state._runtime_s += INTERVAL_S;\n    } else {\n        state.rpm = 0; state.flow_lpm = 0; state.current_a = 0;\n    }\n    state.runtime_min_today = Math.floor(state._runtime_s / 60);\n}\n\nflow.set(STATE_KEY, state);\nnode.status({\n    fill: state.pressure_bar < 3 || state.motor_temp_c > 95 ? \"red\"\n        : state.pressure_bar < 5 || state.motor_temp_c > 80 ? \"yellow\" : \"green\",\n    shape: \"dot\",\n    text: `${state.running ? \"RUNNING\" : \"STANDBY\"} · ${r(state.pressure_bar)} bar · ${r(state.motor_temp_c, 1)}°C`\n});\n\nmsg.payload = {\n    asset_code: ASSET_CODE,\n    metrics: {\n        running: Boolean(state.running),\n        pressure_bar: r(state.pressure_bar),\n        motor_temp_c: r(state.motor_temp_c, 1),\n        flow_lpm: Math.round(state.flow_lpm),\n        current_a: r(state.current_a, 1),\n        rpm: Math.round(state.rpm),\n        runtime_min_today: state.runtime_min_today\n    }\n};\nmsg.headers = { \"Content-Type\": \"application/json\", \"X-Ingest-Key\": INGEST_KEY };\ndelete msg.reset;\ndelete msg.override;\nreturn msg;\n",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 470,
+    "y": 320,
+    "wires": [
+      [
+        "fp_http"
+      ]
+    ]
+  },
+  {
+    "id": "fp_http",
+    "type": "http request",
+    "z": "fire_pmp02_tab",
+    "name": "POST /api/fire/telemetry/ingest",
+    "method": "POST",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "http://localhost:8000/api/fire/telemetry/ingest",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 740,
+    "y": 320,
+    "wires": [
+      [
+        "fp_debug"
+      ]
+    ]
+  },
+  {
+    "id": "fp_debug",
+    "type": "debug",
+    "z": "fire_pmp02_tab",
+    "name": "Response",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 980,
+    "y": 320,
+    "wires": []
+  }
+]

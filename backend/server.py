@@ -1497,6 +1497,23 @@ async def telemetry_ingest(
     return await ingest_telemetry_internal(payload)
 
 
+@api.get("/ingest/assets")
+async def ingest_asset_list(
+    x_ingest_key: Annotated[Optional[str], Header(alias="X-Ingest-Key")] = None,
+):
+    """Asset list for Node-RED simulators (X-Ingest-Key auth, no user login).
+
+    Returns APM assets and fire assets with just the fields a simulator needs.
+    """
+    expected = os.environ.get("INGEST_KEY", "")
+    if not expected or not x_ingest_key or not secrets.compare_digest(x_ingest_key, expected):
+        raise HTTPException(status_code=401, detail="Invalid or missing X-Ingest-Key")
+    fields = {"_id": 0, "asset_code": 1, "name": 1, "asset_type": 1, "status": 1}
+    assets = await db.assets.find({}, fields).sort("asset_code", 1).to_list(2000)
+    fire_assets = await db.fire_assets.find({}, fields).sort("asset_code", 1).to_list(2000)
+    return {"assets": assets, "fire_assets": fire_assets}
+
+
 @api.get("/ingest/key-hint")
 async def ingest_key_hint(user: User = Depends(get_current_user)):
     """Return a masked hint of the current ingest key (tenant admins only)."""
@@ -3746,6 +3763,171 @@ async def delete_report_template(template_id: str,
         raise HTTPException(status_code=404, detail="Template not found")
     await record_audit(user, "report.template.delete", "report_template", template_id)
     return {"ok": True}
+
+# ---------------------------------------------------------------------------
+# Fire asset telemetry ingest (Node-RED)
+# ---------------------------------------------------------------------------
+
+class FireTelemetryIn(BaseModel):
+    """Live reading for a fire asset (pump, hydrant, tank, sprinkler, hooter).
+
+    Identify the asset by asset_code (e.g. PMP-02) or asset_id. `metrics` is
+    merged into the asset's latest metrics, e.g.
+    {"pressure_bar": 7.1, "flow_lpm": 1200, "motor_temp_c": 58, "running": true}.
+    """
+
+    asset_id: Optional[str] = None
+    asset_code: Optional[str] = None
+    status: Optional[str] = None  # NORMAL | ATTENTION | ALARM | FAULT | OFFLINE (optional)
+    metrics: Dict[str, Any] = {}
+    alarm: Optional[bool] = None
+    alarm_type: Optional[str] = None  # e.g. PUMP_FAULT, LOW_PRESSURE
+    alarm_message: Optional[str] = None
+    severity: Optional[str] = None  # CRITICAL | HIGH | MEDIUM | LOW
+    timestamp: Optional[str] = None
+
+
+FIRE_STATUS_RANK = {"NORMAL": 0, "OFFLINE": 0, "ATTENTION": 1, "ALARM": 2, "FAULT": 3}
+
+
+def _derive_fire_status(asset_type: str, m: Dict[str, Any]) -> tuple:
+    """Return (status, reason) from the latest metrics using simple thresholds."""
+    status, reason = "NORMAL", None
+
+    def worse(new: str, why: str) -> None:
+        nonlocal status, reason
+        if FIRE_STATUS_RANK[new] > FIRE_STATUS_RANK[status]:
+            status, reason = new, why
+
+    p = m.get("pressure_bar")
+    if isinstance(p, (int, float)) and asset_type in ("FIRE_PUMP", "HYDRANT", "SPRINKLER_SYSTEM"):
+        if p < 3:
+            worse("ALARM", "LOW_PRESSURE")
+        elif p < 5:
+            worse("ATTENTION", "LOW_PRESSURE")
+    t = m.get("motor_temp_c")
+    if isinstance(t, (int, float)):
+        if t > 95:
+            worse("FAULT", "MOTOR_OVERHEAT")
+        elif t > 80:
+            worse("ATTENTION", "MOTOR_OVERHEAT")
+    lvl = m.get("level_pct")
+    if isinstance(lvl, (int, float)) and asset_type == "FIRE_WATER_TANK":
+        if lvl < 20:
+            worse("ALARM", "LOW_TANK_LEVEL")
+        elif lvl < 40:
+            worse("ATTENTION", "LOW_TANK_LEVEL")
+    if m.get("hooter_on") is True:
+        worse("ALARM", "HOOTER_ACTIVE")
+    return status, reason
+
+
+async def ingest_fire_telemetry_internal(payload: FireTelemetryIn) -> Dict[str, Any]:
+    if payload.asset_id:
+        query: Dict[str, Any] = {"id": payload.asset_id}
+    elif payload.asset_code:
+        query = {"asset_code": payload.asset_code}
+    else:
+        raise HTTPException(status_code=400, detail="asset_id or asset_code required")
+    asset = await db.fire_assets.find_one(query, {"_id": 0})
+    if not asset:
+        raise HTTPException(status_code=404, detail="Fire asset not found")
+
+    ts = payload.timestamp or datetime.now(timezone.utc).isoformat()
+    tid = asset["tenant_id"]
+    metrics = {**(asset.get("metrics") or {}), **(payload.metrics or {})}
+
+    # Status: worst of (explicit status from device, threshold-derived status)
+    derived, reason = _derive_fire_status(asset["asset_type"], metrics)
+    new_status = derived
+    if payload.status:
+        explicit = payload.status.upper()
+        if explicit == "OFFLINE":
+            new_status = "OFFLINE"
+        elif FIRE_STATUS_RANK.get(explicit, 0) > FIRE_STATUS_RANK[new_status]:
+            new_status, reason = explicit, reason or explicit
+    if payload.alarm and FIRE_STATUS_RANK[new_status] < FIRE_STATUS_RANK["ALARM"]:
+        new_status = "ALARM"
+
+    # Health recovers when readings return to normal (base_health = seeded value)
+    base_health = asset.get("base_health", asset.get("health", 100))
+    health = {"ATTENTION": min(base_health, 70), "ALARM": min(base_health, 50),
+              "FAULT": min(base_health, 35)}.get(new_status, base_health)
+
+    await db.fire_assets.update_one(
+        {"id": asset["id"]},
+        {"$set": {"metrics": metrics, "status": new_status, "health": health,
+                  "base_health": base_health, "last_seen": ts}},
+    )
+
+    numeric = {k: v for k, v in (payload.metrics or {}).items()
+               if isinstance(v, (int, float)) and not isinstance(v, bool)}
+    if numeric:
+        await db.fire_asset_readings.insert_one({"asset_id": asset["id"], "tenant_id": tid, "ts": ts, **numeric})
+
+    # Keep the Command Center's legacy collections in sync (matched by name)
+    if asset["asset_type"] == "FIRE_PUMP":
+        pump_status = "FAULT" if new_status in ("ALARM", "FAULT") else (
+            "RUNNING" if metrics.get("running") else "READY")
+        upd: Dict[str, Any] = {"status": pump_status}
+        if "pressure_bar" in metrics:
+            upd["pressure_bar"] = metrics["pressure_bar"]
+        if "runtime_min_today" in metrics:
+            upd["runtime_min_today"] = metrics["runtime_min_today"]
+        await db.fire_pumps.update_one({"tenant_id": tid, "name": asset["name"]}, {"$set": upd})
+    elif asset["asset_type"] == "FIRE_WATER_TANK" and "level_pct" in metrics:
+        await db.fire_water_tanks.update_one(
+            {"tenant_id": tid, "name": asset["name"]},
+            {"$set": {"current_level_pct": metrics["level_pct"], "last_seen": ts}})
+
+    # Raise one fire alarm event when the asset goes into ALARM/FAULT (or alarm=true)
+    event = None
+    prev_rank = FIRE_STATUS_RANK.get(asset.get("status", "NORMAL"), 0)
+    entered_alarm = FIRE_STATUS_RANK[new_status] >= 2 and prev_rank < 2
+    if payload.alarm or entered_alarm:
+        event_type = (payload.alarm_type or reason or "DEVICE_ALARM").upper()
+        already_open = await db.fire_alarm_events.find_one(
+            {"tenant_id": tid, "asset_id": asset["id"], "event_type": event_type,
+             "status": {"$ne": "RESOLVED"}}, {"_id": 0, "id": 1})
+        if not already_open:
+            zone = await db.fire_zones.find_one({"id": asset.get("zone_id")}, {"_id": 0}) or {}
+            event = {
+                "id": str(uuid.uuid4()), "tenant_id": tid, "plant_id": asset.get("plant_id"),
+                "zone_id": asset.get("zone_id"), "zone_name": zone.get("name"),
+                "asset_id": asset["id"], "asset_code": asset["asset_code"],
+                "event_type": event_type,
+                "severity": (payload.severity or ("CRITICAL" if new_status in ("ALARM", "FAULT") else "HIGH")).upper(),
+                "status": "OPEN", "message": payload.alarm_message or f"{asset['name']}: {event_type}",
+                "created_at": ts, "acknowledged": False, "acknowledged_by": None,
+                "acknowledged_at": None, "comment": None,
+            }
+            await db.fire_alarm_events.insert_one(event)
+            event.pop("_id", None)
+            if zone:
+                await db.fire_zones.update_one(
+                    {"id": zone["id"]},
+                    {"$set": {"status": "ALARM" if event["severity"] == "CRITICAL" else "ATTENTION",
+                              "last_alarm_at": ts}})
+
+    await ws_manager.broadcast(tid, {
+        "type": "fire_telemetry", "asset_id": asset["id"], "asset_code": asset["asset_code"],
+        "status": new_status, "health": health, "metrics": metrics, "ts": ts, "event": event,
+    })
+    return {"ok": True, "asset_id": asset["id"], "status": new_status, "health": health,
+            "alarm_created": bool(event)}
+
+
+@api.post("/fire/telemetry/ingest")
+async def fire_telemetry_ingest(
+    payload: FireTelemetryIn,
+    x_ingest_key: Annotated[Optional[str], Header(alias="X-Ingest-Key")] = None,
+):
+    """Node-RED ingest for fire & safety devices. Same X-Ingest-Key as /telemetry/ingest."""
+    expected = os.environ.get("INGEST_KEY", "")
+    if not expected or not x_ingest_key or not secrets.compare_digest(x_ingest_key, expected):
+        raise HTTPException(status_code=401, detail="Invalid or missing X-Ingest-Key")
+    return await ingest_fire_telemetry_internal(payload)
+
 
 # ---------------------------------------------------------------------------
 # Fire & Safety Command Center

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
+import { useLiveTick } from "@/lib/ws";
 import { Wrench, CalendarClock, AlertTriangle } from "lucide-react";
 
 function KpiCard({ icon: Icon, label, value, color = "text-[color:var(--brand-navy)]" }) {
@@ -17,10 +18,11 @@ function KpiCard({ icon: Icon, label, value, color = "text-[color:var(--brand-na
 
 export default function FirePredictiveMaintenance() {
   const [data, setData] = useState(null);
+  const liveTick = useLiveTick();
 
   useEffect(() => {
-    api.get("/fire/assets/predictive-overview").then((r) => setData(r.data));
-  }, []);
+    api.get("/fire/assets/predictive-overview").then((r) => setData(r.data)).catch(() => {});
+  }, [liveTick]);
 
   if (!data) {
     return (

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
+import { useLiveTick } from "@/lib/ws";
 import { HeartPulse, AlertCircle } from "lucide-react";
 
 function healthColor(h) {
@@ -44,10 +45,11 @@ function Legend({ color, label, value }) {
 
 export default function FireAssetHealth() {
   const [data, setData] = useState(null);
+  const liveTick = useLiveTick();
 
   useEffect(() => {
-    api.get("/fire/assets/health-overview").then((r) => setData(r.data));
-  }, []);
+    api.get("/fire/assets/health-overview").then((r) => setData(r.data)).catch(() => {});
+  }, [liveTick]);
 
   if (!data) {
     return (

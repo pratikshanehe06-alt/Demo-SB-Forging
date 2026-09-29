@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { useLiveTick } from "@/lib/ws";
 import {
   Flame, Gauge, Droplets, Waves, Fuel, Siren, ShieldCheck,
   AlertTriangle, Clock, MapPin,
@@ -89,6 +90,7 @@ export default function FireSafety() {
   const [summary, setSummary] = useState(null);
   const [assets, setAssets] = useState([]);
   const [loading, setLoading] = useState(true);
+  const liveTick = useLiveTick();
 
   async function load() {
     const [sumRes, assetsRes] = await Promise.all([
@@ -104,7 +106,8 @@ export default function FireSafety() {
     load();
     const interval = setInterval(load, 15000);
     return () => clearInterval(interval);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveTick]);
 
   if (loading || !summary) {
     return (

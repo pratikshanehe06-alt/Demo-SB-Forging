@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { useLiveTick } from "@/lib/ws";
 import { Button } from "@/components/ui/button";
 import {
   MapPin, AlertTriangle, Clock, CheckCircle2, XCircle,
@@ -73,6 +74,7 @@ export default function FireZones() {
   const [alarms, setAlarms] = useState([]);
   const [selectedZone, setSelectedZone] = useState(null); // null = show all
   const [loading, setLoading] = useState(true);
+  const liveTick = useLiveTick();
 
   async function load() {
     const [zonesRes, alarmsRes] = await Promise.all([
@@ -84,7 +86,7 @@ export default function FireZones() {
     setLoading(false);
   }
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [liveTick]);
 
   async function acknowledge(alarmId) {
     try {

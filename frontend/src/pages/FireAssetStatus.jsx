@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
+import { useLiveTick } from "@/lib/ws";
 import { Droplets, Waves, Gauge, Fuel, Siren, Clock } from "lucide-react";
 
 const TYPE_META = {
@@ -112,10 +113,11 @@ function FireAssetCard({ asset }) {
 export default function FireAssetStatus() {
   const [data, setData] = useState(null);
   const [typeFilter, setTypeFilter] = useState("all");
+  const liveTick = useLiveTick();
 
   useEffect(() => {
-    api.get("/fire/assets/status-overview").then((r) => setData(r.data));
-  }, []);
+    api.get("/fire/assets/status-overview").then((r) => setData(r.data)).catch(() => {});
+  }, [liveTick]);
 
   if (!data) {
     return (

@@ -92,7 +92,4 @@ credentials.json
 *.key
 .credentials
 
-# Node-RED flow with the real ingest key filled in
-# coreot_nodered_flow.local.json
-# nodered/cnc04_flow.json
-# nodered/cnc04_simulator.js
+

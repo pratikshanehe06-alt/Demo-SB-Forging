@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { useLiveTick } from "@/lib/ws";
 import { Button } from "@/components/ui/button";
 import { Flame, CheckCircle2, Clock } from "lucide-react";
 import { toast } from "sonner";
@@ -25,6 +26,7 @@ export default function FireAlarmEvents() {
   const [tab, setTab] = useState("ALL");
   const [showResolved, setShowResolved] = useState(false);
   const [loading, setLoading] = useState(true);
+  const liveTick = useLiveTick();
 
   async function load() {
     const params = { limit: 200 };
@@ -38,7 +40,7 @@ export default function FireAlarmEvents() {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     load();
-  }, [tab, showResolved]);
+  }, [tab, showResolved, liveTick]);
 
   async function acknowledge(id) {
     try {
