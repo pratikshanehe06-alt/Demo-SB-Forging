@@ -1,0 +1,22 @@
+# docker compose up -d            → app on http://localhost:8000 with SQLite in the coreot_data volume
+# docker compose --profile pg up -d → the same with PostgreSQL (set COREOT_DATABASE_URL below)
+services:
+  coreot:
+    build: .
+    ports: ["8000:8000"]
+    environment:
+      COREOT_DEMO_PASSWORD: ${COREOT_DEMO_PASSWORD:-CoreOT@2026}
+      # COREOT_DATABASE_URL: postgresql://coreot:coreot@db:5432/coreot
+    volumes: ["coreot_data:/data"]
+    restart: unless-stopped
+
+  db:
+    profiles: ["pg"]
+    image: postgres:16-alpine
+    environment: { POSTGRES_USER: coreot, POSTGRES_PASSWORD: coreot, POSTGRES_DB: coreot }
+    volumes: ["coreot_pg:/var/lib/postgresql/data"]
+    restart: unless-stopped
+
+volumes:
+  coreot_data:
+  coreot_pg:

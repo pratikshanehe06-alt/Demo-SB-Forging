@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in · CoreOT R8</title>
+<link rel="icon" href="img/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="css/fonts.css">
+<style>
+:root{--ink:#17150f;--mut:#6b6657;--line:rgba(23,21,15,.12);--acc:#f7c23e;--crit:#d64545;--surf:rgba(255,255,255,.86)}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;display:grid;place-items:center;padding:16px;background:linear-gradient(180deg,#f2f2f2 0%,#f5f2e8 42%,#fbeab4 100%) fixed;color:var(--ink);font:14px/1.45 "Plus Jakarta Sans",system-ui,-apple-system,"Segoe UI",sans-serif}
+.card{width:min(400px,100%);background:var(--surf);border:1px solid var(--line);border-radius:18px;padding:30px 28px;box-shadow:0 10px 40px rgba(23,21,15,.1);backdrop-filter:blur(8px)}
+.brand{display:flex;align-items:center;gap:12px;margin-bottom:22px}
+.logo{width:40px;height:40px;border-radius:12px;background:#17150f;display:grid;place-items:center;flex:none}
+.logo i{width:14px;height:14px;background:var(--acc);transform:rotate(45deg);border-radius:3px;display:block}
+.brand b{display:block;font-size:17px}.brand small{color:var(--mut)}
+h1{font-size:21px;margin:0 0 4px}p{margin:0 0 20px;color:var(--mut)}
+label{display:block;font-weight:600;font-size:12.5px;margin:0 0 14px}
+input{display:block;width:100%;height:44px;margin-top:6px;border-radius:11px;border:1px solid var(--line);background:#fff;padding:0 12px;font:inherit;color:var(--ink)}
+input:focus{outline:2px solid var(--acc);outline-offset:1px}
+button{width:100%;height:46px;border:0;border-radius:12px;background:var(--acc);color:#17150f;font:800 14.5px inherit;font-family:inherit;cursor:pointer;margin-top:4px}
+button:disabled{opacity:.6;cursor:wait}
+.err{color:var(--crit);font-weight:600;min-height:20px;margin:10px 0 0;font-size:13px}
+details{margin-top:18px;color:var(--mut);font-size:12.5px}
+summary{cursor:pointer;font-weight:600}
+table{width:100%;border-collapse:collapse;margin-top:8px}
+td{padding:4px 0;border-bottom:1px solid var(--line)}
+td button{all:unset;cursor:pointer;color:var(--ink);font-weight:700;text-decoration:underline}
+</style>
+</head>
+<body>
+<main class="card">
+  <div class="brand"><div class="logo"><i></i></div><div><b>CoreOT R8</b><small id="plant">Plant operations</small></div></div>
+  <h1>Sign in</h1>
+  <p>Use the account your plant admin gave you.</p>
+  <form id="f" autocomplete="on">
+    <label>Username<input id="u" name="username" autocomplete="username" required autofocus></label>
+    <label>Password<input id="p" name="password" type="password" autocomplete="current-password" required></label>
+    <button id="b" type="submit">Sign in</button>
+    <div class="err" id="e" role="alert"></div>
+  </form>
+  <details>
+    <summary>Test accounts</summary>
+    <table>
+      <tr><td><button type="button" data-u="admin">admin</button></td><td>Plant Admin, all rights</td></tr>
+      <tr><td><button type="button" data-u="nkulkarni">nkulkarni</button></td><td>CXO view, read-only</td></tr>
+      <tr><td><button type="button" data-u="ajoshi">ajoshi</button></td><td>Manager</td></tr>
+      <tr><td><button type="button" data-u="rpatil">rpatil</button></td><td>Supervisor</td></tr>
+      <tr><td><button type="button" data-u="skhan">skhan</button></td><td>Operator</td></tr>
+    </table>
+    <div style="margin-top:8px">The password for the test accounts is in the README (set with COREOT_DEMO_PASSWORD).</div>
+  </details>
+</main>
+<script>
+const f=document.getElementById('f'),e=document.getElementById('e'),b=document.getElementById('b');
+document.querySelectorAll('[data-u]').forEach(x=>x.onclick=()=>{document.getElementById('u').value=x.dataset.u;document.getElementById('p').focus()});
+f.onsubmit=async ev=>{ev.preventDefault();e.textContent='';b.disabled=true;
+  try{const r=await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:document.getElementById('u').value.trim().toLowerCase(),password:document.getElementById('p').value})});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok){e.textContent=j.detail||'Could not sign in';b.disabled=false;return}
+    try{localStorage.setItem('coreot-token',j.token)}catch(_){}
+    location.replace('/')}
+  catch(_){e.textContent='Cannot reach the plant server';b.disabled=false}};
+</script>
+</body>
+</html>

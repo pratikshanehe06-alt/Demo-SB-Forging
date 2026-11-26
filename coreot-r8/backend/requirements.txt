@@ -1,0 +1,9 @@
+fastapi==0.165.0
+uvicorn[standard]==0.54.0
+SQLAlchemy==2.1.9
+pydantic==2.14.4
+PyJWT==2.15.1
+argon2-cffi==25.1.0
+python-multipart==0.0.34
+# only when COREOT_DATABASE_URL points at PostgreSQL
+psycopg[binary]==3.3.9
